@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DOMINIUM - Viga de Rolamento</title>
+    <link rel="stylesheet" href="style.css">
+    <!-- Eel.js is injected automatically by the server -->
+    <script type="text/javascript" src="/eel.js"></script>
+</head>
+
+<body>
+    <!-- Loading Overlay -->
+    <div id="loading" class="loading-overlay">
+        <div class="spinner"></div>
+    </div>
+
+    <div id="app">
+        <!-- SIDEBAR -->
+        <aside>
+            <h1>DOMINIUM</h1>
+
+            <div class="input-group">
+                <label>Arquivo SAP2000 (Excel)</label>
+                <div class="input-row">
+                    <input type="text" id="input-excel" value="Exemplo Viga Ponte Rolante.xlsx">
+                    <button class="primary-btn" id="btn-arquivo" style="margin:0; padding: 8px;">...</button>
+                </div>
+            </div>
+
+            <div class="input-group">
+                <label>Geometria</label>
+                <select id="input-tipo">
+                    <option value="retangular">Retangular</option>
+                    <option value="t">Seção T</option>
+                </select>
+                <div class="input-row">
+                    <input type="number" id="input-bw" value="30" placeholder="bw">
+                    <input type="number" id="input-h" value="60" placeholder="h">
+                </div>
+                <div class="input-row">
+                    <input type="number" id="input-bf" value="80" placeholder="bf" disabled>
+                    <input type="number" id="input-hf" value="10" placeholder="hf" disabled>
+                </div>
+                <input type="number" id="input-cb" value="3.0" placeholder="Cobrimento">
+            </div>
+
+            <div class="input-group">
+                <label>Armadura (Manual)</label>
+                <div class="input-row">
+                    <input type="number" id="input-phi-est" value="8.0" placeholder="Estribo mm">
+                    <input type="number" id="input-phi-long" value="20.0" placeholder="Long mm">
+                </div>
+                <div class="input-row">
+                    <input type="number" id="input-n-barras" value="4" placeholder="N Barras">
+                    <input type="number" id="input-as-sup" value="0.0" placeholder="As Sup">
+                </div>
+            </div>
+
+            <div class="input-group">
+                <label>Dimensionamento</label>
+                <div class="checkbox-group">
+                    <input type="checkbox" id="input-auto">
+                    <span style="font-size: 0.9rem; color: #cbd5e1;">Auto Dimensionar</span>
+                </div>
+                <select id="input-criterio">
+                    <option value="elu">ELU (Pior Caso)</option>
+                    <option value="fadiga">Fadiga (Maior Variação)</option>
+                </select>
+                <input type="text" id="input-secao-x" placeholder="Posição X (opcional)">
+            </div>
+
+            <button id="btn-processar" class="primary-btn">CALCULAR</button>
+        </aside>
+
+        <!-- MAIN AREA -->
+        <main>
+            <div class="tabs-header">
+                <button class="tab-btn active" data-tab="tab-sol">Solicitações</button>
+                <button class="tab-btn" data-tab="tab-comb">Combinações</button>
+                <button class="tab-btn" data-tab="tab-sec">Seção Detalhada</button>
+                <button class="tab-btn" data-tab="tab-rel">Relatório</button>
+            </div>
+
+            <!-- TAB: SOLICITACOES -->
+            <div id="tab-sol" class="tab-content active">
+                <div class="card">
+                    <h3>Envoltórias de Momento e Cortante (Brutos)</h3>
+                    <div class="plot-container">
+                        <img id="img-sol" class="plot-img" alt="Grafico Solicitacoes"
+                            src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0MDAiIGhlaWdodD0iMjAwIj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjZjhmYWZjIi8+PHRleHQgeD0iNTAlIiB5PSI1MCUiIGRvbWluYW50LWJhc2VsaW5lPSJtaWRkbGUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZpbGw9IiM5NGEzYjgiPkNsaXF1ZSBlbSBDYWxjdWxhcj48L3RleHQ+PC9zdmc+">
+                    </div>
+                </div>
+            </div>
+
+            <!-- TAB: COMBINACOES -->
+            <div id="tab-comb" class="tab-content">
+                <div class="card">
+                    <h3>Combinações ELU, ELS e Fadiga</h3>
+                    <div class="plot-container">
+                        <img id="img-comb" class="plot-img" alt="Grafico Combinacoes">
+                    </div>
+                </div>
+            </div>
+
+            <!-- TAB: SECAO -->
+            <div id="tab-sec" class="tab-content">
+                <div class="metrics-grid">
+                    <div class="metric-card">
+                        <div class="metric-label">Posição Crítica</div>
+                        <div class="metric-value" id="val-pos">-</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-label">Momento Máx (ELU)</div>
+                        <div class="metric-value" id="val-msd">-</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-label">Cortante Máx (ELU)</div>
+                        <div class="metric-value" id="val-vsd">-</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-label">Variação Momento (Fadiga)</div>
+                        <div class="metric-value" id="val-fad">-</div>
+                    </div>
+                </div>
+
+                <div class="card" style="display:flex; justify-content:center;">
+                    <div class="plot-container" style="max-width: 600px;">
+                        <img id="img-sec" class="plot-img" alt="Desenho Secao">
+                    </div>
+                </div>
+            </div>
+
+            <!-- TAB: RELATORIO -->
+            <div id="tab-rel" class="tab-content">
+                <div class="card">
+                    <h3>Memória de Cálculo Detalhada</h3>
+                    <div id="report-container" class="report-content">
+                        <p style="color:#64748b; font-style:italic; padding: 20px; text-align: center;">
+                            O relatório detalhado será gerado após o cálculo.
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+        </main>
+    </div>
+    <script src="main.js"></script>
+</body>
+
+</html>
