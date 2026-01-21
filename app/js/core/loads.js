@@ -332,8 +332,8 @@ export class LoadProcessor {
             { id: "ENV_MOVEL", label: "Trem (Carga Móvel)", color: "#ff5722" },
             { id: "ELU", label: "ELU (Combinado)", color: "#d32f2f" },
             { id: "FADIGA", label: "Fadiga (Frequente)", color: "#7b1fa2" },
-            { id: "ELS_QP", label: "Deflexão (Q. Perm.)", color: "#9c27b0" },
-            { id: "ELS_FREQ", label: "Fissuração (Freq.)", color: "#00bcd4" }
+            { id: "ELS_QP", label: "Flecha (Q. Perm.)", color: "#9c27b0" },
+            { id: "ELS_FREQ", label: "Abertura de Fissura (Freq.)", color: "#00bcd4" }
         ];
     }
 

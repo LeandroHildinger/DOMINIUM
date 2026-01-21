@@ -421,14 +421,10 @@ function updateDeflectionChart() {
         const elsVerifier = new ServiceabilityVerifier({ bw, h, d }, { fck, fyk }, As, { phi });
 
         // Momentos para flecha (ELS-QP)
-        let moments_qp = [];
-        if (dataToUse.M_max) {
-            moments_qp = dataToUse.stations.map((x, i) => ({ x, M: (dataToUse.M_max[i] + dataToUse.M_min[i]) / 2 }));
-        } else if (dataToUse.M_values) {
-            moments_qp = dataToUse.stations.map((x, i) => ({ x, M: dataToUse.M_values[i] }));
-        }
+        const momentsQp = buildMomentSeries(dataToUse);
+        if (!momentsQp.length) return;
 
-        const result = elsVerifier.verifyDeflection(moments_qp, loadProcessor.totalLength);
+        const result = elsVerifier.verifyDeflection(momentsQp, loadProcessor.totalLength);
 
         deflectionChart.data.labels = result.deflections.map(pt => pt.x);
         deflectionChart.data.datasets[0].data = result.deflections.map(pt => ({ x: pt.x, y: pt.f }));
@@ -448,6 +444,49 @@ function toPoints(stations, values) {
         points.push({ x: safeStations[i], y: safeValues[i] });
     }
     return points;
+}
+
+function pickEnvelopeValue(maxVal, minVal) {
+    const maxSafe = Number.isFinite(maxVal) ? maxVal : 0;
+    const minSafe = Number.isFinite(minVal) ? minVal : 0;
+    return Math.abs(maxSafe) >= Math.abs(minSafe) ? maxSafe : minSafe;
+}
+
+function getMomentAtIndex(data, idx) {
+    if (!data || idx === null || idx === undefined) {
+        return null;
+    }
+    if (Array.isArray(data.M_max) && Array.isArray(data.M_min)) {
+        return pickEnvelopeValue(data.M_max[idx], data.M_min[idx]);
+    }
+    if (Array.isArray(data.M_values)) {
+        const value = data.M_values[idx];
+        return Number.isFinite(value) ? value : 0;
+    }
+    return null;
+}
+
+function buildMomentSeries(data) {
+    if (!data || !Array.isArray(data.stations)) {
+        return [];
+    }
+    if (Array.isArray(data.M_max) && Array.isArray(data.M_min)) {
+        return data.stations.map((x, i) => ({
+            x,
+            M: pickEnvelopeValue(data.M_max[i], data.M_min[i])
+        }));
+    }
+    if (Array.isArray(data.M_values)) {
+        return data.stations.map((x, i) => ({
+            x,
+            M: Number.isFinite(data.M_values[i]) ? data.M_values[i] : 0
+        }));
+    }
+    return [];
+}
+
+function safeUtilization(value) {
+    return Number.isFinite(value) ? value : 0;
 }
 
 /**
@@ -606,6 +645,16 @@ function updateCriticalSections() {
     const sectionsContainer = document.getElementById('critical-sections');
     sectionsContainer.innerHTML = '';
 
+    const elsQpData = loadProcessor.getLoadCaseData('ELS_QP');
+    const elsVerifierGlobal = new ServiceabilityVerifier(geometry, materials, As, { phi });
+    let deflectionResult = null;
+    if (elsQpData && Array.isArray(elsQpData.stations)) {
+        const momentsQp = buildMomentSeries(elsQpData);
+        if (momentsQp.length) {
+            deflectionResult = elsVerifierGlobal.verifyDeflection(momentsQp, loadProcessor.totalLength);
+        }
+    }
+
     for (const section of criticalSections) {
         const results = [];
 
@@ -645,6 +694,26 @@ function updateCriticalSections() {
                     status: fatigueResult.status,
                     utilizacao: fatigueResult.utilizacao
                 });
+                const concreteResult = fatigueVerifier.verifyConcreteCompressionFatigue(
+                    fatigueData.M_max[idx]
+                );
+                results.push({
+                    name: 'Fadiga Concreto (Compressao)',
+                    status: concreteResult.status,
+                    utilizacao: safeUtilization(concreteResult.utilizacao)
+                });
+
+                const crackingResult = fatigueVerifier.checkCrackingFatigue(
+                    fatigueData.M_max[idx]
+                );
+                const crackingUtil = safeUtilization(
+                    (crackingResult.sigmaTraction / crackingResult.limite) * 100
+                );
+                results.push({
+                    name: 'Fadiga Concreto (Fissuracao)',
+                    status: crackingResult.cracked ? 'FAIL' : 'OK',
+                    utilizacao: crackingUtil
+                });
             }
         }
 
@@ -653,16 +722,26 @@ function updateCriticalSections() {
         if (elsFreqData && elsFreqData.stations) {
             const idxEls = elsFreqData.stations.findIndex(x => Math.abs(x - section.x) < 0.1);
             if (idxEls >= 0) {
-                const M_freq = Math.max(Math.abs(elsFreqData.M_max[idxEls]), Math.abs(elsFreqData.M_min[idxEls]));
-                const elsVerifier = new ServiceabilityVerifier(geometry, materials, As, { phi });
-                const crackResult = elsVerifier.verifyCrackWidth(M_freq);
+                const M_freq = getMomentAtIndex(elsFreqData, idxEls);
+                if (M_freq !== null) {
+                    const crackResult = elsVerifierGlobal.verifyCrackWidth(M_freq);
 
-                results.push({
-                    name: 'Fissuração',
-                    status: crackResult.status,
-                    utilizacao: crackResult.utilizacao
-                });
+                    results.push({
+                        name: 'Abertura de Fissura',
+                        status: crackResult.status,
+                        utilizacao: safeUtilization(crackResult.utilizacao)
+                    });
+                }
             }
+        }
+
+        // Flecha (ELS-QP)
+        if (deflectionResult) {
+            results.push({
+                name: 'Flecha (ELS-QP)',
+                status: deflectionResult.status,
+                utilizacao: safeUtilization(deflectionResult.utilizacao)
+            });
         }
 
         sectionsContainer.innerHTML += createSectionCard(section, results);
