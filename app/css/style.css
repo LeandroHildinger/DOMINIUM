@@ -67,11 +67,21 @@ canvas {
     --overview-top-height: 56%;
     --app-header-height: 80px;
     --app-footer-height: 0px;
+    --ui-min-font-size: 0.875rem;
 }
 
 .app-shell {
     height: 100vh;
     overflow: hidden;
+}
+
+body {
+    font-size: var(--ui-min-font-size);
+}
+
+.text-xs {
+    font-size: var(--ui-min-font-size) !important;
+    line-height: 1.35;
 }
 
 .app-main {

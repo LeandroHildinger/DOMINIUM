@@ -16,6 +16,7 @@ let momentChart = null;
 let shearChart = null;
 let deflectionChart = null;
 let currentLoadCase = 'ENV_MOVEL';
+let currentChartTarget = 'shear';
 let detailSections = [];
 let selectedDetailSectionId = null;
 
@@ -370,11 +371,12 @@ function setupChartTabs() {
             if (chartTitle) {
                 if (target === 'shear') chartTitle.innerText = 'Cortantes (kN)';
                 else if (target === 'moment') chartTitle.innerText = 'Momentos (kN.m)';
-                else if (target === 'deflection') chartTitle.innerText = 'Linha Elástica (cm)';
+                else if (target === 'deflection') chartTitle.innerText = 'Linha Elastica (cm)';
             }
-            if (chartSubtitle) {
-                if (target === 'deflection') chartSubtitle.innerText = 'ELS Quase Permanente';
-                else chartSubtitle.innerText = '';
+            currentChartTarget = target;
+            updateChartFormula();
+            if (target === 'deflection') {
+                updateDeflectionChart();
             }
         });
     });
@@ -383,22 +385,27 @@ function setupChartTabs() {
 // Grafico de Flecha
 function initDeflectionChart() {
     const ctx = document.getElementById('chart-deflection')?.getContext('2d');
-    if (ctx) {
-        deflectionChart = new Chart(ctx, {
-            type: 'line',
-            data: { labels: [], datasets: [{ label: 'Flecha', data: [], borderColor: '#9c27b0', backgroundColor: 'rgba(156, 39, 176, 0.1)', fill: true, tension: 0.4, pointRadius: 2 }] },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                scales: { y: { reverse: true, title: { display: true, text: 'Flecha (cm)' } }, x: { type: 'linear', title: { display: true, text: 'Posicao (m)' } } },
-                plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => `f=${ctx.parsed.y.toFixed(2)} cm` } } }
-            }
-        });
+    if (!ctx || deflectionChart) {
+        return;
     }
+    deflectionChart = new Chart(ctx, {
+        type: 'line',
+        data: { labels: [], datasets: [{ label: 'Flecha', data: [], borderColor: '#9c27b0', backgroundColor: 'rgba(156, 39, 176, 0.1)', fill: true, tension: 0.4, pointRadius: 2 }] },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: { y: { reverse: false, title: { display: true, text: 'Flecha (cm)' } }, x: { type: 'linear', title: { display: true, text: 'Posicao (m)' } } },
+            plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => `f=${ctx.parsed.y.toFixed(2)} cm` } } }
+        }
+    });
 }
 
 function updateDeflectionChart() {
-    if (!deflectionChart || !loadProcessor) return;
+    if (!loadProcessor) return;
+    if (!deflectionChart) {
+        initDeflectionChart();
+    }
+    if (!deflectionChart) return;
     try {
         const elsData = loadProcessor.getLoadCaseData('ELS_QP');
         // Se nao tiver ELS_QP, tentar usar DEAD como fallback seguro pra nao dar erro, mas idealmente deve ter ELS_QP
@@ -424,7 +431,12 @@ function updateDeflectionChart() {
         const momentsQp = buildMomentSeries(dataToUse);
         if (!momentsQp.length) return;
 
-        const result = elsVerifier.verifyDeflection(momentsQp, loadProcessor.totalLength);
+        const result = buildDeflectionBySpans(
+            elsVerifier,
+            momentsQp,
+            loadProcessor.frames,
+            loadProcessor.totalLength
+        );
 
         deflectionChart.data.labels = result.deflections.map(pt => pt.x);
         deflectionChart.data.datasets[0].data = result.deflections.map(pt => ({ x: pt.x, y: pt.f }));
@@ -485,8 +497,91 @@ function buildMomentSeries(data) {
     return [];
 }
 
+function buildDeflectionBySpans(elsVerifier, moments, frames, totalLength) {
+    const spans = Array.isArray(frames) && frames.length
+        ? frames.map((frame) => {
+            const startX = Number.isFinite(frame.startX) ? frame.startX : 0;
+            const endX = Number.isFinite(frame.endX)
+                ? frame.endX
+                : (Number.isFinite(frame.length) ? startX + frame.length : totalLength || 0);
+            return { startX, endX };
+        })
+        : [{ startX: 0, endX: totalLength || 0 }];
+
+    const alpha_f = elsVerifier.calcCreepFactor();
+    const factor = 1 + alpha_f;
+
+    const deflections = [];
+    let worstUtil = 0;
+    let worstTotal = 0;
+    let worstLimit = 0;
+
+    for (const span of spans) {
+        const spanLength = span.endX - span.startX;
+        if (spanLength <= 0) {
+            continue;
+        }
+        const spanMoments = moments
+            .filter((pt) => pt.x >= span.startX - 1e-6 && pt.x <= span.endX + 1e-6)
+            .map((pt) => ({ x: pt.x - span.startX, M: pt.M }));
+
+        if (spanMoments.length < 2) {
+            continue;
+        }
+
+        const immediate = elsVerifier.calcDeflection(spanMoments, spanLength);
+        const spanDeflections = immediate.deflections.map((pt) => ({
+            x: pt.x + span.startX,
+            f: pt.f * factor
+        }));
+        deflections.push(...spanDeflections);
+
+        const f_total = Math.abs(immediate.maxDeflection) * factor;
+        const f_lim = (spanLength * 100) / 250;
+        const util = f_lim > 0 ? (f_total / f_lim) * 100 : 0;
+
+        if (util > worstUtil) {
+            worstUtil = util;
+            worstTotal = f_total;
+            worstLimit = f_lim;
+        }
+    }
+
+    deflections.sort((a, b) => a.x - b.x);
+
+    return {
+        deflections,
+        f_total: worstTotal,
+        f_lim: worstLimit,
+        utilizacao: worstUtil,
+        status: worstUtil <= 100 ? 'OK' : 'FAIL'
+    };
+}
+
 function safeUtilization(value) {
     return Number.isFinite(value) ? value : 0;
+}
+
+function getCombinationFormula(loadCase) {
+    switch (loadCase) {
+        case 'ELU':
+            return 'ELU = 1.4*(G + Trilho) + 1.4*Q';
+        case 'FADIGA':
+            return 'Fadiga = 1.0*(G + Trilho) + 1.0*Q';
+        case 'ELS_QP':
+            return 'ELS-QP = 1.0*(G + Trilho) + 0.5*Q';
+        case 'ELS_FREQ':
+            return 'ELS-FREQ = 1.0*(G + Trilho) + 0.8*Q';
+        default:
+            return '';
+    }
+}
+
+function updateChartFormula() {
+    const subtitle = document.getElementById('chart-subtitle');
+    if (!subtitle) return;
+    const formulaCase = currentChartTarget === 'deflection' ? 'ELS_QP' : currentLoadCase;
+    subtitle.textContent = getCombinationFormula(formulaCase);
 }
 
 /**
@@ -558,6 +653,7 @@ function renderLoadCaseFilters() {
             currentLoadCase = e.target.dataset.loadcase;
             renderLoadCaseFilters();
             updateCharts(currentLoadCase);
+            updateChartFormula();
             updateCriticalSections();
             updateDeflectionChart(); // Atualiza flecha sempre que trocar caso
         });
@@ -651,7 +747,12 @@ function updateCriticalSections() {
     if (elsQpData && Array.isArray(elsQpData.stations)) {
         const momentsQp = buildMomentSeries(elsQpData);
         if (momentsQp.length) {
-            deflectionResult = elsVerifierGlobal.verifyDeflection(momentsQp, loadProcessor.totalLength);
+            deflectionResult = buildDeflectionBySpans(
+                elsVerifierGlobal,
+                momentsQp,
+                loadProcessor.frames,
+                loadProcessor.totalLength
+            );
         }
     }
 
@@ -762,6 +863,7 @@ function runCalculation() {
 
     // Atualizar grÃ¡ficos com caso atual
     updateCharts(currentLoadCase);
+    updateChartFormula();
 
     // Info da viga
     const infoBeam = document.getElementById('info-beam');
@@ -779,8 +881,7 @@ function runCalculation() {
     // Atualizar secoes criticas
     updateCriticalSections();
 
-    // Inicializar e atualizar grafico de flecha
-    initDeflectionChart();
+    // Atualizar grafico de flecha
     updateDeflectionChart();
 
     // Mostrar resumo
@@ -1465,6 +1566,7 @@ function setupResizers() {
 document.addEventListener('DOMContentLoaded', () => {
     updateLayoutMetrics();
     initCharts();
+    initDeflectionChart();
     setupExcelUpload();
     setupTabs();
     setupChartTabs();
