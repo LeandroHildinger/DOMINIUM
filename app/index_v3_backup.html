@@ -151,28 +151,6 @@
                         </div>
                     </div>
 
-                    <!-- Armadura Transversal (Estribos) -->
-                    <div class="mb-6">
-                        <h3 class="text-sm font-medium text-gray-600 mb-3">Armadura Transversal</h3>
-                        <div class="grid grid-cols-2 gap-3">
-                            <div>
-                                <label class="block text-xs text-gray-500 mb-1">Diâmetro (mm)</label>
-                                <select id="inp-stirr-phi"
-                                    class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-primary">
-                                    <option value="5">5.0</option>
-                                    <option value="6.3">6.3</option>
-                                    <option value="8" selected>8.0</option>
-                                    <option value="10">10.0</option>
-                                </select>
-                            </div>
-                            <div>
-                                <label class="block text-xs text-gray-500 mb-1">Espaçamento (cm)</label>
-                                <input type="number" id="inp-stirr-s" value="15" step="1"
-                                    class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-primary">
-                            </div>
-                        </div>
-                    </div>
-
                     <!-- Botão Calcular -->
                     <button id="btn-calculate"
                         class="w-full bg-primary hover:bg-secondary text-white font-semibold py-3 px-4 rounded-lg transition-colors shadow-md">
@@ -203,59 +181,54 @@
 
                 <div class="tab-panels">
                     <div class="tab-panel active" id="tab-overview" role="tabpanel">
-                        <div class="bg-white rounded-lg shadow p-4 mb-3">
-                            <div class="flex flex-wrap items-center gap-3">
-                                <span class="text-sm font-medium text-gray-700">Caso de Carga:</span>
-                                <div id="load-case-filters" class="flex flex-wrap gap-2">
-                                    <!-- Gerado via JS -->
+                        <div class="overview-split" id="overview-split">
+                            <div class="overview-top">
+                                <div class="bg-white rounded-lg shadow p-4">
+                                    <div class="flex flex-wrap items-center gap-3">
+                                        <span class="text-sm font-medium text-gray-700">Caso de Carga:</span>
+                                        <div id="load-case-filters" class="flex flex-wrap gap-2">
+                                            <!-- Gerado via JS -->
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="overview-charts">
+                                    <div class="bg-white rounded-lg shadow p-4 chart-panel">
+                                        <h3 id="chart-moment-title" class="text-md font-semibold text-gray-700 mb-3">
+                                            Envoltória de Momentos (kN.m)</h3>
+                                        <p id="combo-formula-moment" class="text-xs text-gray-500 mb-2"
+                                            style="display: none;"></p>
+                                        <div class="chart-body">
+                                            <canvas id="chart-moments"></canvas>
+                                        </div>
+                                    </div>
+
+                                    <div class="bg-white rounded-lg shadow p-4 chart-panel">
+                                        <h3 id="chart-shear-title" class="text-md font-semibold text-gray-700 mb-3">
+                                            Envoltória de Cortantes (kN)</h3>
+                                        <p id="combo-formula-shear" class="text-xs text-gray-500 mb-2"
+                                            style="display: none;"></p>
+                                        <div class="chart-body">
+                                            <canvas id="chart-shear"></canvas>
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
-                        </div>
 
-                        <div class="flex flex-col gap-4">
-                            <!-- Container Unificado de Graficos -->
-                            <div class="bg-white rounded-lg shadow p-4">
-                                <div class="flex items-center justify-between mb-4 border-b pb-2">
-                                    <h3 class="text-md font-semibold text-gray-700" id="current-chart-title">Diagramas
+                            <div id="resizer-overview" class="app-resizer app-resizer-horizontal"
+                                title="Arraste para ajustar"></div>
+
+                            <div class="overview-bottom">
+                                <div class="bg-white rounded-lg shadow p-6 h-full flex flex-col">
+                                    <h3 class="text-lg font-semibold text-gray-800 mb-4 border-b pb-2">
+                                        Verificação por Seção Crítica
                                     </h3>
-                                    <div class="flex gap-2 bg-gray-100 p-1 rounded-lg">
-                                        <button
-                                            class="px-3 py-1 text-xs font-medium rounded-md bg-white shadow-sm text-gray-800 transition-all chart-toggle active"
-                                            data-target="shear">Cortantes</button>
-                                        <button
-                                            class="px-3 py-1 text-xs font-medium rounded-md text-gray-600 hover:bg-white hover:shadow-sm transition-all chart-toggle"
-                                            data-target="moment">Momentos</button>
-                                        <button
-                                            class="px-3 py-1 text-xs font-medium rounded-md text-gray-600 hover:bg-white hover:shadow-sm transition-all chart-toggle"
-                                            data-target="deflection">Flecha</button>
-                                    </div>
-                                </div>
 
-                                <div style="height: 350px;" class="relative">
-                                    <div id="container-shear" class="chart-container absolute inset-0 z-10 bg-white">
-                                        <canvas id="chart-shear"></canvas>
-                                    </div>
-                                    <div id="container-moment"
-                                        class="chart-container absolute inset-0 z-0 bg-white opacity-0 pointer-events-none">
-                                        <canvas id="chart-moments"></canvas>
-                                    </div>
-                                    <div id="container-deflection"
-                                        class="chart-container absolute inset-0 z-0 bg-white opacity-0 pointer-events-none">
-                                        <canvas id="chart-deflection"></canvas>
-                                    </div>
-                                </div>
-                                <p id="chart-subtitle" class="text-xs text-gray-500 mt-2 text-right"></p>
-                            </div>
-
-                            <!-- Verificacoes -->
-                            <div class="bg-white rounded-lg shadow p-6">
-                                <h3 class="text-lg font-semibold text-gray-800 mb-4 border-b pb-2">
-                                    Verificação por Seção Crítica
-                                </h3>
-                                <div id="critical-sections"
-                                    class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                                    <div class="text-gray-400 text-center py-8 col-span-full">
-                                        Clique em "CALCULAR" para gerar a análise
+                                    <div id="critical-sections"
+                                        class="critical-sections-grid grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                                        <div class="text-gray-400 text-center py-8 col-span-full">
+                                            Clique em "CALCULAR" para gerar a análise
+                                        </div>
                                     </div>
                                 </div>
                             </div>

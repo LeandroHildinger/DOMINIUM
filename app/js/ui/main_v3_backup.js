@@ -8,13 +8,11 @@ import { SectionMaterials } from '../core/materials.js';
 import { BendingVerifier } from '../core/bending.js';
 import { ShearVerifier } from '../core/shear.js';
 import { FatigueVerifier } from '../core/fatigue.js';
-import { ServiceabilityVerifier } from '../core/serviceability.js';
 
 // Instancias globais
 let loadProcessor = null;
 let momentChart = null;
 let shearChart = null;
-let deflectionChart = null;
 let currentLoadCase = 'ENV_MOVEL';
 let detailSections = [];
 let selectedDetailSectionId = null;
@@ -329,116 +327,6 @@ function initCharts() {
     });
 }
 
-// Configura as abas dos gráficos
-function setupChartTabs() {
-    const chartToggles = document.querySelectorAll('.chart-toggle');
-    const chartContainers = {
-        'shear': document.getElementById('container-shear'),
-        'moment': document.getElementById('container-moment'),
-        'deflection': document.getElementById('container-deflection')
-    };
-    const chartTitle = document.getElementById('current-chart-title');
-    const chartSubtitle = document.getElementById('chart-subtitle');
-
-    chartToggles.forEach(toggle => {
-        toggle.addEventListener('click', () => {
-            // Atualizar botoes ativos
-            chartToggles.forEach(t => {
-                t.classList.remove('active', 'bg-white', 'shadow-sm', 'text-gray-800');
-                t.classList.add('text-gray-600', 'hover:bg-white', 'hover:shadow-sm');
-            });
-            toggle.classList.add('active', 'bg-white', 'shadow-sm', 'text-gray-800');
-            toggle.classList.remove('text-gray-600', 'hover:bg-white', 'hover:shadow-sm');
-
-            // Mostrar container alvo
-            const target = toggle.dataset.target;
-
-            Object.values(chartContainers).forEach(c => {
-                if (c) {
-                    c.classList.add('opacity-0', 'pointer-events-none');
-                    c.classList.remove('z-10');
-                    c.classList.add('z-0');
-                }
-            });
-
-            if (chartContainers[target]) {
-                chartContainers[target].classList.remove('opacity-0', 'pointer-events-none', 'z-0');
-                chartContainers[target].classList.add('z-10');
-            }
-
-            // Atualizar titulos
-            if (chartTitle) {
-                if (target === 'shear') chartTitle.innerText = 'Cortantes (kN)';
-                else if (target === 'moment') chartTitle.innerText = 'Momentos (kN.m)';
-                else if (target === 'deflection') chartTitle.innerText = 'Linha Elástica (cm)';
-            }
-            if (chartSubtitle) {
-                if (target === 'deflection') chartSubtitle.innerText = 'ELS Quase Permanente';
-                else chartSubtitle.innerText = '';
-            }
-        });
-    });
-}
-
-// Grafico de Flecha
-function initDeflectionChart() {
-    const ctx = document.getElementById('chart-deflection')?.getContext('2d');
-    if (ctx) {
-        deflectionChart = new Chart(ctx, {
-            type: 'line',
-            data: { labels: [], datasets: [{ label: 'Flecha', data: [], borderColor: '#9c27b0', backgroundColor: 'rgba(156, 39, 176, 0.1)', fill: true, tension: 0.4, pointRadius: 2 }] },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                scales: { y: { reverse: true, title: { display: true, text: 'Flecha (cm)' } }, x: { type: 'linear', title: { display: true, text: 'Posicao (m)' } } },
-                plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => `f=${ctx.parsed.y.toFixed(2)} cm` } } }
-            }
-        });
-    }
-}
-
-function updateDeflectionChart() {
-    if (!deflectionChart || !loadProcessor) return;
-    try {
-        const elsData = loadProcessor.getLoadCaseData('ELS_QP');
-        // Se nao tiver ELS_QP, tentar usar DEAD como fallback seguro pra nao dar erro, mas idealmente deve ter ELS_QP
-        const dataToUse = (elsData && elsData.stations) ? elsData : loadProcessor.getLoadCaseData('DEAD');
-
-        if (!dataToUse || !dataToUse.stations) return;
-
-        // Calcular flecha
-        const bw = parseFloat(document.getElementById('inp-bw')?.value) || 30;
-        const h = parseFloat(document.getElementById('inp-h')?.value) || 60;
-        const cover = parseFloat(document.getElementById('inp-cover')?.value) || 3;
-        const fck = parseFloat(document.getElementById('inp-fck')?.value) || 30;
-        const fyk = parseFloat(document.getElementById('inp-fyk-long')?.value) || 500;
-        const nBars = parseInt(document.getElementById('inp-nbars')?.value) || 5;
-        const phi = parseFloat(document.getElementById('inp-phi')?.value) || 20;
-
-        const d = h - cover - 0.8 - (phi / 20);
-        const As = nBars * Math.PI * (phi / 20) ** 2;
-
-        const elsVerifier = new ServiceabilityVerifier({ bw, h, d }, { fck, fyk }, As, { phi });
-
-        // Momentos para flecha (ELS-QP)
-        let moments_qp = [];
-        if (dataToUse.M_max) {
-            moments_qp = dataToUse.stations.map((x, i) => ({ x, M: (dataToUse.M_max[i] + dataToUse.M_min[i]) / 2 }));
-        } else if (dataToUse.M_values) {
-            moments_qp = dataToUse.stations.map((x, i) => ({ x, M: dataToUse.M_values[i] }));
-        }
-
-        const result = elsVerifier.verifyDeflection(moments_qp, loadProcessor.totalLength);
-
-        deflectionChart.data.labels = result.deflections.map(pt => pt.x);
-        deflectionChart.data.datasets[0].data = result.deflections.map(pt => ({ x: pt.x, y: pt.f }));
-        deflectionChart.update();
-
-    } catch (e) {
-        console.warn('Erro Deflection:', e);
-    }
-}
-
 function toPoints(stations, values) {
     const points = [];
     const safeStations = Array.isArray(stations) ? stations : [];
@@ -453,11 +341,47 @@ function toPoints(stations, values) {
 /**
  * Atualiza os graficos para um caso de carga
  */
+function getCombinationFormula(loadCase) {
+    if (loadCase === "ELU") {
+        return "ELU = 1.4*(G + Trilho) + 1.4*Q";
+    }
+    if (loadCase === "FADIGA") {
+        return "FADIGA = 1.0*(G + Trilho) + 0.5*Q";
+    }
+    return "";
+}
+
+function updateComboFormula(loadCase) {
+    const text = getCombinationFormula(loadCase);
+    const targets = [
+        document.getElementById("combo-formula-moment"),
+        document.getElementById("combo-formula-shear")
+    ];
+    for (const target of targets) {
+        if (!target) continue;
+        target.textContent = text;
+        target.style.display = text ? "block" : "none";
+    }
+}
+
+function updateChartTitles(isEnvelope) {
+    const momentTitle = document.getElementById('chart-moment-title');
+    const shearTitle = document.getElementById('chart-shear-title');
+    if (!momentTitle || !shearTitle) {
+        return;
+    }
+    const momentText = isEnvelope ? 'Envoltória de Momentos (kN.m)' : 'Diagrama de Momentos (kN.m)';
+    const shearText = isEnvelope ? 'Envoltória de Cortantes (kN)' : 'Diagrama de Cortantes (kN)';
+    momentTitle.textContent = momentText;
+    shearTitle.textContent = shearText;
+}
 function updateCharts(loadCase) {
     const data = loadProcessor.getLoadCaseData(loadCase);
+    updateComboFormula(loadCase);
     const stations = Array.isArray(data.stations) ? data.stations : [];
 
     const isEnvelope = data.M_max && data.M_max.length > 0;
+    updateChartTitles(isEnvelope);
 
     // Momentos
     momentChart.data.labels = [];
@@ -471,6 +395,7 @@ function updateCharts(loadCase) {
         momentChart.data.datasets[0].data = toPoints(stations, data.M_values);
         momentChart.data.datasets[0].label = 'Momento';
         momentChart.data.datasets[1].data = [];
+        momentChart.data.datasets[1].label = '';
         momentChart.data.datasets[1].hidden = true;
     }
     momentChart.update();
@@ -487,6 +412,7 @@ function updateCharts(loadCase) {
         shearChart.data.datasets[0].data = toPoints(stations, data.V_values);
         shearChart.data.datasets[0].label = 'Cortante';
         shearChart.data.datasets[1].data = [];
+        shearChart.data.datasets[1].label = '';
         shearChart.data.datasets[1].hidden = true;
     }
     shearChart.update();
@@ -520,7 +446,6 @@ function renderLoadCaseFilters() {
             renderLoadCaseFilters();
             updateCharts(currentLoadCase);
             updateCriticalSections();
-            updateDeflectionChart(); // Atualiza flecha sempre que trocar caso
         });
     });
 }
@@ -630,39 +555,20 @@ function updateCriticalSections() {
             utilizacao: shearResult.ratioBiela
         });
 
-        // Fadiga
+        // Fadiga - usar dados de fadiga
         const fatigueData = loadProcessor.getLoadCaseData('FADIGA');
-        if (fatigueData && fatigueData.stations) {
-            const idx = fatigueData.stations.findIndex(x => Math.abs(x - section.x) < 0.1);
-            if (idx >= 0) {
-                const fatigueVerifier = new FatigueVerifier(geometry, materials, As, phi);
-                const fatigueResult = fatigueVerifier.verifySteelFatigue(
-                    fatigueData.M_max[idx],
-                    fatigueData.M_min[idx]
-                );
-                results.push({
-                    name: 'Fadiga Aço',
-                    status: fatigueResult.status,
-                    utilizacao: fatigueResult.utilizacao
-                });
-            }
-        }
-
-        // Fissuracao (ELS-FREQ)
-        const elsFreqData = loadProcessor.getLoadCaseData('ELS_FREQ');
-        if (elsFreqData && elsFreqData.stations) {
-            const idxEls = elsFreqData.stations.findIndex(x => Math.abs(x - section.x) < 0.1);
-            if (idxEls >= 0) {
-                const M_freq = Math.max(Math.abs(elsFreqData.M_max[idxEls]), Math.abs(elsFreqData.M_min[idxEls]));
-                const elsVerifier = new ServiceabilityVerifier(geometry, materials, As, { phi });
-                const crackResult = elsVerifier.verifyCrackWidth(M_freq);
-
-                results.push({
-                    name: 'Fissuração',
-                    status: crackResult.status,
-                    utilizacao: crackResult.utilizacao
-                });
-            }
+        const idx = fatigueData.stations.findIndex(x => Math.abs(x - section.x) < 0.1);
+        if (idx >= 0) {
+            const fatigueVerifier = new FatigueVerifier(geometry, materials, As, phi);
+            const fatigueResult = fatigueVerifier.verifySteelFatigue(
+                fatigueData.M_max[idx],
+                fatigueData.M_min[idx]
+            );
+            results.push({
+                name: 'Fadiga Aço',
+                status: fatigueResult.status,
+                utilizacao: fatigueResult.utilizacao
+            });
         }
 
         sectionsContainer.innerHTML += createSectionCard(section, results);
@@ -697,12 +603,8 @@ function runCalculation() {
     `;
     infoBeam.classList.remove('hidden');
 
-    // Atualizar secoes criticas
+    // Atualizar seÃ§Ãµes crÃ­ticas
     updateCriticalSections();
-
-    // Inicializar e atualizar grafico de flecha
-    initDeflectionChart();
-    updateDeflectionChart();
 
     // Mostrar resumo
     document.getElementById('summary-panel').classList.remove('hidden');
@@ -1388,7 +1290,6 @@ document.addEventListener('DOMContentLoaded', () => {
     initCharts();
     setupExcelUpload();
     setupTabs();
-    setupChartTabs();
     setupResizers();
     setupDetailInputs();
     setupDomainImageFallback();

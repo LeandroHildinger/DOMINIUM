@@ -167,32 +167,12 @@ export class LoadProcessor {
         }
 
         // Combinacoes (ELU, FADIGA)
-        // Combinacoes (ELU, FADIGA, ELS_QP, ELS_FREQ)
-        if (['ELU', 'FADIGA', 'ELS_QP', 'ELS_FREQ'].includes(loadCase)) {
+        if (loadCase === "ELU" || loadCase === "FADIGA") {
             // Para combinacoes, usar ENV_MOVEL como base
             const mobile = this.getLoadCaseData("ENV_MOVEL");
 
-            let gamma_g = 1.0;
-            let gamma_q = 1.0;
-
-            switch (loadCase) {
-                case 'ELU':
-                    gamma_g = 1.4;
-                    gamma_q = 1.4;
-                    break;
-                case 'FADIGA':
-                    gamma_g = 1.0;
-                    gamma_q = 1.0;
-                    break;
-                case 'ELS_QP': // Quase Permanente (psi2 = 0.5)
-                    gamma_g = 1.0;
-                    gamma_q = 0.5;
-                    break;
-                case 'ELS_FREQ': // Frequente (psi1 = 0.8)
-                    gamma_g = 1.0;
-                    gamma_q = 0.8;
-                    break;
-            }
+            const gamma_g = loadCase === "ELU" ? 1.4 : 1.0;
+            const gamma_q = loadCase === "ELU" ? 1.4 : 0.5;
 
             const result = {
                 stations: mobile.stations,
@@ -331,9 +311,7 @@ export class LoadProcessor {
             { id: "TRILHO", label: "Trilho", color: "#795548" },
             { id: "ENV_MOVEL", label: "Trem (Carga Móvel)", color: "#ff5722" },
             { id: "ELU", label: "ELU (Combinado)", color: "#d32f2f" },
-            { id: "FADIGA", label: "Fadiga (Frequente)", color: "#7b1fa2" },
-            { id: "ELS_QP", label: "Deflexão (Q. Perm.)", color: "#9c27b0" },
-            { id: "ELS_FREQ", label: "Fissuração (Freq.)", color: "#00bcd4" }
+            { id: "FADIGA", label: "Fadiga (Frequente)", color: "#7b1fa2" }
         ];
     }
 
