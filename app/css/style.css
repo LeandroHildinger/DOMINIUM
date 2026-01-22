@@ -57,6 +57,56 @@ select:focus {
     transition: width 0.5s ease-out;
 }
 
+/* Linha compacta das verificacoes por secao critica */
+.critical-row {
+    display: grid;
+    /* Label | Value | Bar | Status */
+    grid-template-columns: minmax(120px, auto) 45px 1fr 45px;
+    gap: 12px;
+    align-items: center;
+    padding: 8px 0;
+    border-bottom: 1px solid #e5e7eb;
+}
+
+.critical-row:last-child {
+    border-bottom: 0;
+}
+
+.critical-label {
+    color: #374151;
+    font-size: 0.85rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.critical-value {
+    color: #6b7280;
+    font-size: var(--ui-min-font-size);
+    text-align: right;
+}
+
+.critical-bar {
+    height: 8px;
+    background: #e5e7eb;
+    border-radius: 999px;
+    overflow: hidden;
+}
+
+.critical-bar-fill {
+    height: 100%;
+    transition: width 0.2s ease;
+}
+
+.critical-status {
+    font-size: var(--ui-min-font-size);
+    font-weight: 600;
+    border-radius: 999px;
+    text-align: center;
+    padding: 2px 6px;
+    min-width: 44px;
+}
+
 /* Chart container */
 canvas {
     max-height: 100%;

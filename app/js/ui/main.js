@@ -1,166 +1,388 @@
-/**
- * DOMINIUM - Main UI Controller (v2)
- * ===================================
- * Orquestra a interface com filtros de casos de carga
- */
-import { LoadProcessor } from '../core/loads.js';
-import { SectionMaterials } from '../core/materials.js';
+﻿import { LoadProcessor } from '../core/loads.js';
 import { BendingVerifier } from '../core/bending.js';
 import { ShearVerifier } from '../core/shear.js';
 import { FatigueVerifier } from '../core/fatigue.js';
 import { ServiceabilityVerifier } from '../core/serviceability.js';
 
-// Instancias globais
 let loadProcessor = null;
-let momentChart = null;
-let shearChart = null;
-let deflectionChart = null;
-let currentLoadCase = 'ENV_MOVEL';
-let currentChartTarget = 'shear';
+let currentLoadCase = 'ELU';
+let chartMoments = null;
+let chartShear = null;
 let detailSections = [];
 let selectedDetailSectionId = null;
 
-function normalizeKey(key) {
-    return String(key || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+const ENVELOPE_CASES = new Set(['ENV_MOVEL', 'ELU', 'FADIGA']);
+
+const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+
+const CHART_COLORS = {
+    momentMax: '#3b82f6',
+    momentMin: '#ef4444',
+    shearMax: '#22c55e',
+    shearMin: '#f59e0b'
+};
+
+const CHART_FILLS = {
+    moment: 'rgba(59, 130, 246, 0.18)',
+    shear: 'rgba(34, 197, 94, 0.18)'
+};
+
+const parseNumber = (value) => {
+    if (typeof value === 'number') return value;
+    if (value === null || value === undefined) return NaN;
+    const cleaned = String(value).replace(',', '.').trim();
+    const parsed = parseFloat(cleaned);
+    return Number.isFinite(parsed) ? parsed : NaN;
+};
+
+const roundStation = (value) => {
+    if (!Number.isFinite(value)) return value;
+    return Math.round(value * 10) / 10;
+};
+
+const formatNumber = (value, digits = 1) => Number.isFinite(value) ? value.toFixed(digits) : '0.0';
+
+const buildPoints = (stations = [], values = []) => (
+    stations.map((x, index) => ({ x, y: values[index] ?? 0 }))
+);
+
+function initCharts() {
+    const momentCanvas = document.getElementById('chart-moments');
+    const shearCanvas = document.getElementById('chart-shear');
+    if (!momentCanvas || !shearCanvas) return;
+
+    const baseOptions = (yTitle, reverseY = false) => ({
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        scales: {
+            x: {
+                type: 'linear',
+                title: { display: true, text: 'Posição (m)' },
+                grid: { color: '#e2e8f0' }
+            },
+            y: {
+                reverse: reverseY,
+                title: { display: true, text: yTitle },
+                grid: { color: '#e2e8f0' }
+            }
+        },
+        plugins: {
+            legend: {
+                display: true,
+                labels: { usePointStyle: false, boxWidth: 40, boxHeight: 12 }
+            },
+            tooltip: { mode: 'nearest', intersect: false }
+        }
+    });
+
+    chartMoments = new Chart(momentCanvas.getContext('2d'), {
+        type: 'line',
+        data: { datasets: [] },
+        options: baseOptions('Momento (kN.m)', true)
+    });
+
+    chartShear = new Chart(shearCanvas.getContext('2d'), {
+        type: 'line',
+        data: { datasets: [] },
+        options: baseOptions('Cortante (kN)', false)
+    });
 }
 
-function getColumnMap(rows) {
-    if (!Array.isArray(rows) || rows.length === 0) {
-        return {};
+function updateCharts(loadCaseId = 'ELU') {
+    if (!loadProcessor || !chartMoments || !chartShear) return;
+    currentLoadCase = loadCaseId;
+
+    const data = loadProcessor.getLoadCaseData(loadCaseId);
+    if (!data) return;
+
+    const isEnvelope = ENVELOPE_CASES.has(loadCaseId);
+
+    // Update buttons style
+    updateLoadCaseButtons(loadCaseId);
+
+    // Update Titles
+    const momentTitle = document.getElementById('chart-moment-title');
+    const shearTitle = document.getElementById('chart-shear-title');
+    if (momentTitle) momentTitle.textContent = `${isEnvelope ? 'Envoltória' : 'Diagrama'} de Momentos (kN.m)`;
+    if (shearTitle) shearTitle.textContent = `${isEnvelope ? 'Envoltória' : 'Diagrama'} de Cortantes (kN)`;
+
+    // Formulas
+    const momentFormula = document.getElementById('combo-formula-moment');
+    const shearFormula = document.getElementById('combo-formula-shear');
+    let formulaText = '';
+    if (loadCaseId === 'ELU') formulaText = 'ELU = 1,4*(G + Trilho) + 1,4*Q';
+    else if (loadCaseId === 'FADIGA') formulaText = 'FADIGA = 1,0*(G + Trilho) + 0,5*Q';
+
+    if (momentFormula) momentFormula.textContent = formulaText;
+    if (shearFormula) shearFormula.textContent = formulaText;
+
+    const commonOpts = {
+        pointRadius: 3,
+        pointHoverRadius: 5,
+        borderWidth: 2,
+        tension: 0,
+        parsing: false
+    };
+
+    if (isEnvelope) {
+        chartMoments.data.datasets = [
+            {
+                ...commonOpts,
+                label: 'M. Mín',
+                data: buildPoints(data.stations, data.M_min),
+                borderColor: CHART_COLORS.momentMin,
+                backgroundColor: CHART_FILLS.moment,
+                fill: 'origin'
+            },
+            {
+                ...commonOpts,
+                label: 'M. Máx',
+                data: buildPoints(data.stations, data.M_max),
+                borderColor: CHART_COLORS.momentMax,
+                backgroundColor: CHART_FILLS.moment,
+                fill: 'origin'
+            }
+        ];
+
+        chartShear.data.datasets = [
+            {
+                ...commonOpts,
+                label: 'V. Mín',
+                data: buildPoints(data.stations, data.V_min),
+                borderColor: CHART_COLORS.shearMin,
+                backgroundColor: CHART_FILLS.shear,
+                fill: 'origin'
+            },
+            {
+                ...commonOpts,
+                label: 'V. Máx',
+                data: buildPoints(data.stations, data.V_max),
+                borderColor: CHART_COLORS.shearMax,
+                backgroundColor: CHART_FILLS.shear,
+                fill: 'origin'
+            }
+        ];
+    } else {
+        chartMoments.data.datasets = [{
+            ...commonOpts,
+            label: 'Momento',
+            data: buildPoints(data.stations, data.M_values),
+            borderColor: CHART_COLORS.momentMax,
+            backgroundColor: CHART_FILLS.moment,
+            fill: 'origin'
+        }];
+
+        chartShear.data.datasets = [{
+            ...commonOpts,
+            label: 'Cortante',
+            data: buildPoints(data.stations, data.V_values),
+            borderColor: CHART_COLORS.shearMax,
+            backgroundColor: CHART_FILLS.shear,
+            fill: 'origin'
+        }];
     }
-    const keys = Object.keys(rows[0]);
-    const map = {};
-    for (const key of keys) {
-        const norm = normalizeKey(key);
-        if (norm === 'frame') map.frame = key;
-        if (norm === 'station') map.station = key;
-        if (norm === 'outputcase') map.outputcase = key;
-        if (norm === 'v2') map.v2 = key;
-        if (norm === 'm3') map.m3 = key;
-    }
-    return map;
+
+    chartMoments.update('none');
+    chartShear.update('none');
 }
 
-function mapCaseName(raw) {
-    const name = String(raw || '').trim().toUpperCase();
-    if (!name) return null;
-    if (name.includes('DEAD')) return 'DEAD';
-    if (name.includes('TRILHO')) return 'TRILHO';
-    if (name.includes('ENV')) return 'ENV_MOVEL';
-    return null;
+function renderLoadCaseFilters() {
+    const container = document.getElementById('load-case-filters');
+    if (!container || !loadProcessor) return;
+
+    const cases = loadProcessor.getAvailableLoadCases();
+
+    // Create buttons with dynamic data attributes
+    // Usando rounded-xl para vértices mais arredondados (chanfrados/suaves)
+    container.innerHTML = cases.map(c => `
+        <button class="custom-case-btn px-4 py-2 rounded-xl shadow-sm text-sm font-semibold transition-all mr-2 mb-2"
+                data-case="${c.id}"
+                data-color="${c.color}">
+            ${c.label}
+        </button>
+    `).join('');
+
+    // Add click listeners
+    container.querySelectorAll('.custom-case-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            updateCharts(btn.dataset.case);
+        });
+    });
+
+    // Initialize styles
+    updateLoadCaseButtons(currentLoadCase);
+}
+
+function updateLoadCaseButtons(activeId) {
+    document.querySelectorAll('.custom-case-btn').forEach(btn => {
+        const id = btn.dataset.case;
+        const color = btn.dataset.color || '#cbd5e1';
+        const isActive = id === activeId;
+
+        // Base styles ensuring override of any conflicting defaults
+        btn.style.borderRadius = '12px'; // Força o arredondamento desejado
+
+        if (isActive) {
+            btn.style.backgroundColor = color;
+            btn.style.color = '#ffffff';
+            btn.style.border = 'none'; // Remove borda padrão se houver
+            btn.style.borderLeft = `4px solid ${color}`; // Mantém consistência visual
+            btn.classList.add('shadow-md');
+            btn.classList.remove('bg-white', 'text-gray-700');
+        } else {
+            btn.style.backgroundColor = '#ffffff';
+            btn.style.color = '#334155';
+            btn.style.border = 'none';
+            btn.style.borderLeft = `4px solid ${color}`;
+            btn.classList.remove('shadow-md');
+            btn.classList.add('bg-white', 'text-gray-700');
+        }
+    });
+}
+
+function buildFrameList(frameStats) {
+    return Array.from(frameStats.entries()).map(([name, stat]) => ({
+        name,
+        startX: stat.min,
+        endX: stat.max,
+        length: roundStation(stat.max - stat.min)
+    })).sort((a, b) => a.startX - b.startX);
+}
+
+function flattenSimpleCase(rows, frames) {
+    const byFrame = new Map();
+    rows.forEach((row) => {
+        if (!byFrame.has(row.frame)) {
+            byFrame.set(row.frame, []);
+        }
+        byFrame.get(row.frame).push({ x: row.x, V: row.V, M: row.M });
+    });
+
+    const order = frames.length
+        ? frames.map((frame) => frame.name)
+        : Array.from(byFrame.keys()).sort((a, b) => parseFloat(a) - parseFloat(b));
+
+    const result = [];
+    order.forEach((frameName) => {
+        const items = byFrame.get(frameName);
+        if (!items) return;
+        items.sort((a, b) => a.x - b.x);
+        result.push(...items);
+    });
+    return result;
+}
+
+function flattenEnvelopeCase(rows, frames) {
+    const byFrame = new Map();
+    rows.forEach((row) => {
+        if (!byFrame.has(row.frame)) {
+            byFrame.set(row.frame, new Map());
+        }
+        const frameMap = byFrame.get(row.frame);
+        const key = row.x;
+        const item = frameMap.get(key) || {
+            x: row.x,
+            V_max: -Infinity,
+            V_min: Infinity,
+            M_max: -Infinity,
+            M_min: Infinity
+        };
+        item.V_max = Math.max(item.V_max, row.V);
+        item.V_min = Math.min(item.V_min, row.V);
+        item.M_max = Math.max(item.M_max, row.M);
+        item.M_min = Math.min(item.M_min, row.M);
+        frameMap.set(key, item);
+    });
+
+    const order = frames.length
+        ? frames.map((frame) => frame.name)
+        : Array.from(byFrame.keys()).sort((a, b) => parseFloat(a) - parseFloat(b));
+
+    const result = [];
+    order.forEach((frameName) => {
+        const frameMap = byFrame.get(frameName);
+        if (!frameMap) return;
+        const items = Array.from(frameMap.values()).sort((a, b) => a.x - b.x);
+        result.push(...items);
+    });
+    return result;
 }
 
 function parseExcelRows(rows) {
-    const cols = getColumnMap(rows);
-    if (!cols.frame || !cols.station || !cols.outputcase || !cols.v2 || !cols.m3) {
-        throw new Error('Excel columns not found.');
+    if (!Array.isArray(rows)) {
+        return null;
     }
-    const items = [];
-    for (const row of rows) {
-        const xRaw = parseFloat(row[cols.station]);
-        if (!Number.isFinite(xRaw)) continue;
-        const x = Math.round(xRaw * 10) / 10;
-        const frame = String(row[cols.frame] || '').trim();
-        if (!frame) continue;
-        const caseId = mapCaseName(row[cols.outputcase]);
-        if (!caseId) continue;
-        const vVal = parseFloat(row[cols.v2]);
-        const mVal = parseFloat(row[cols.m3]);
-        const v = Number.isFinite(vVal) ? vVal : null;
-        const m = Number.isFinite(mVal) ? mVal : null;
-        if (v === null && m === null) continue;
-        items.push({ frame, x, caseId, v, m });
-    }
-    return items;
-}
 
-function buildLoadData(items) {
-    const frameExtents = new Map();
-    const updateExtent = (frame, x) => {
-        const current = frameExtents.get(frame);
-        if (!current) {
-            frameExtents.set(frame, { min: x, max: x });
+    const validCases = new Set(['DEAD', 'TRILHO', 'ENV_MOVEL']);
+    const normalized = [];
+    const frameStats = new Map();
+
+    rows.forEach((row) => {
+        const outputCase = typeof row.OutputCase === 'string'
+            ? row.OutputCase.trim()
+            : row.OutputCase;
+        if (!validCases.has(outputCase)) return;
+
+        const frame = row.Frame !== undefined && row.Frame !== null ? String(row.Frame).trim() : '';
+        if (!frame || frame.toLowerCase() === 'text') return;
+
+        const station = roundStation(parseNumber(row.Station));
+        const v = parseNumber(row.V2);
+        const m = parseNumber(row.M3);
+        if (!Number.isFinite(station) || !Number.isFinite(v) || !Number.isFinite(m)) {
             return;
         }
-        current.min = Math.min(current.min, x);
-        current.max = Math.max(current.max, x);
-    };
-    for (const item of items) {
-        updateExtent(item.frame, item.x);
-    }
-    const frameOrder = Array.from(frameExtents.keys()).sort((a, b) => parseFloat(a) - parseFloat(b));
 
-    const buildSimpleCase = (caseId) => {
-        const frameMap = new Map();
-        for (const item of items) {
-            if (item.caseId !== caseId) continue;
-            if (!frameMap.has(item.frame)) frameMap.set(item.frame, []);
-            frameMap.get(item.frame).push({ x: item.x, V: item.v || 0, M: item.m || 0 });
-        }
-        const combined = [];
-        for (const frame of frameOrder) {
-            const list = frameMap.get(frame) || [];
-            list.sort((a, b) => a.x - b.x);
-            combined.push(...list);
-        }
-        return combined;
-    };
+        normalized.push({ outputCase, frame, x: station, V: v, M: m });
 
-    const buildEnvMovel = () => {
-        const groupMap = new Map();
-        for (const item of items) {
-            if (item.caseId !== 'ENV_MOVEL') continue;
-            const key = `${item.frame}|${item.x}`;
-            if (!groupMap.has(key)) {
-                groupMap.set(key, { frame: item.frame, x: item.x, vVals: [], mVals: [] });
-            }
-            const group = groupMap.get(key);
-            if (item.v !== null) group.vVals.push(item.v);
-            if (item.m !== null) group.mVals.push(item.m);
-        }
-        const frameMap = new Map();
-        for (const group of groupMap.values()) {
-            const vMax = group.vVals.length ? Math.max(...group.vVals) : 0;
-            const vMin = group.vVals.length ? Math.min(...group.vVals) : 0;
-            const mMax = group.mVals.length ? Math.max(...group.mVals) : 0;
-            const mMin = group.mVals.length ? Math.min(...group.mVals) : 0;
-            if (!frameMap.has(group.frame)) frameMap.set(group.frame, []);
-            frameMap.get(group.frame).push({ x: group.x, V_max: vMax, V_min: vMin, M_max: mMax, M_min: mMin });
-        }
-        const combined = [];
-        for (const frame of frameOrder) {
-            const list = frameMap.get(frame) || [];
-            list.sort((a, b) => a.x - b.x);
-            combined.push(...list);
-        }
-        return combined;
-    };
-
-    const dead = buildSimpleCase('DEAD');
-    const trilho = buildSimpleCase('TRILHO');
-    const envMovel = buildEnvMovel();
-
-    const frames = frameOrder.map((frame) => {
-        const ext = frameExtents.get(frame);
-        const length = ext ? Math.max(0, ext.max - ext.min) : 0;
-        return { name: frame, length: length, startX: ext.min, endX: ext.max };
+        const stat = frameStats.get(frame) || { min: station, max: station };
+        stat.min = Math.min(stat.min, station);
+        stat.max = Math.max(stat.max, station);
+        frameStats.set(frame, stat);
     });
 
-    let totalLength = 0;
-    for (const ext of frameExtents.values()) {
-        totalLength = Math.max(totalLength, ext.max);
+    if (!normalized.length) {
+        return null;
     }
 
-    return { dead, trilho, envMovel, frames, totalLength };
+    const frames = buildFrameList(frameStats);
+    const totalLength = frames.length
+        ? Math.max(...frames.map((frame) => frame.endX))
+        : Math.max(...normalized.map((row) => row.x));
+
+    const grouped = {
+        DEAD: [],
+        TRILHO: [],
+        ENV_MOVEL: []
+    };
+
+    normalized.forEach((row) => {
+        grouped[row.outputCase].push(row);
+    });
+
+    return {
+        dead: flattenSimpleCase(grouped.DEAD, frames),
+        trilho: flattenSimpleCase(grouped.TRILHO, frames),
+        envMovel: flattenEnvelopeCase(grouped.ENV_MOVEL, frames),
+        frames,
+        totalLength
+    };
 }
 
-async function readExcelFile(file) {
+async function parseExcelFile(file) {
     const buffer = await file.arrayBuffer();
     const workbook = XLSX.read(buffer, { type: 'array' });
     const sheetName = workbook.SheetNames[0];
-    if (!sheetName) throw new Error('No sheets found.');
-    const sheet = workbook.Sheets[sheetName];
-    return XLSX.utils.sheet_to_json(sheet, { defval: null });
+    if (!sheetName) {
+        throw new Error('Planilha não encontrada.');
+    }
+    const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { defval: null });
+    const parsed = parseExcelRows(rows);
+    if (!parsed) {
+        throw new Error('Dados inválidos na planilha.');
+    }
+    return parsed;
 }
 
 function setupExcelUpload() {
@@ -169,19 +391,14 @@ function setupExcelUpload() {
     const status = document.getElementById('excel-status');
     if (!input || !button || !status) return;
 
-    const setStatus = (text, isError = false) => {
-        status.textContent = text;
-        status.className = isError ? 'text-xs text-red-600 mt-2' : 'text-xs text-gray-500 mt-2';
+    const setStatus = (message, isError = false) => {
+        status.textContent = message;
+        status.classList.toggle('text-red-500', isError);
+        status.classList.toggle('text-gray-500', !isError);
     };
 
-    if (!window.XLSX) {
-        setStatus('XLSX library not loaded.', true);
-        button.disabled = true;
-        return;
-    }
-
     input.addEventListener('change', () => {
-        if (input.files && input.files[0]) {
+        if (input.files && input.files.length) {
             setStatus(`Arquivo selecionado: ${input.files[0].name}`);
         } else {
             setStatus('Sem arquivo carregado.');
@@ -189,668 +406,193 @@ function setupExcelUpload() {
     });
 
     button.addEventListener('click', async () => {
-        if (!input.files || !input.files[0]) {
+        if (!input.files || !input.files.length) {
             setStatus('Selecione um arquivo .xlsx.', true);
             return;
         }
         try {
-            setStatus('Lendo Excel...');
-            const rows = await readExcelFile(input.files[0]);
-            const items = parseExcelRows(rows);
-            const loadData = buildLoadData(items);
-            if (!loadData.dead.length || !loadData.trilho.length || !loadData.envMovel.length) {
-                throw new Error('Load cases not found in Excel.');
-            }
+            setStatus('Lendo arquivo...');
+            const data = await parseExcelFile(input.files[0]);
             if (!loadProcessor) {
                 loadProcessor = new LoadProcessor();
             }
-            loadProcessor.setCaseData(loadData);
+            loadProcessor.setCaseData(data);
+            setStatus(`Arquivo carregado: ${input.files[0].name}`);
             runCalculation();
-            setStatus(`Excel carregado: ${input.files[0].name}`);
-        } catch (err) {
-            console.error(err);
-            setStatus('Erro ao ler Excel.', true);
+        } catch (error) {
+            console.error(error);
+            setStatus('Erro ao ler o arquivo Excel.', true);
         }
     });
 }
 
-
-
-function initCharts() {
-    const ctxMoments = document.getElementById('chart-moments').getContext('2d');
-    const ctxShear = document.getElementById('chart-shear').getContext('2d');
-
-    // Grafico de Momentos
-    momentChart = new Chart(ctxMoments, {
-        type: 'line',
-        data: {
-            labels: [],
-            datasets: [
-                {
-                    label: 'M_max',
-                    data: [],
-                    borderColor: '#2196f3',
-                    backgroundColor: 'rgba(33, 150, 243, 0.15)',
-                    fill: '+1',
-                    tension: 0.4,
-                    pointRadius: 4,
-                    pointBackgroundColor: '#2196f3'
-                },
-                {
-                    label: 'M_min',
-                    data: [],
-                    borderColor: '#f44336',
-                    backgroundColor: 'rgba(244, 67, 54, 0.15)',
-                    fill: 'origin',
-                    tension: 0.4,
-                    pointRadius: 4,
-                    pointBackgroundColor: '#f44336'
-                }
-            ]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            scales: {
-                y: {
-                    reverse: true,
-                    title: { display: true, text: 'Momento (kN.m)' },
-                    grid: { color: 'rgba(0,0,0,0.1)' }
-                },
-                x: {
-                    type: 'linear',
-                    title: { display: true, text: 'Posição (m)' },
-                    grid: { color: 'rgba(0,0,0,0.05)' }
-                }
-            },
-            plugins: {
-                legend: { position: 'top', labels: { filter: (legendItem, data) => { const dataset = data.datasets[legendItem.datasetIndex]; return dataset && dataset.label; } } },
-                tooltip: {
-                    callbacks: {
-                        label: ctx => `x=${ctx.parsed.x.toFixed(1)} m, ${ctx.dataset.label}: ${ctx.parsed.y.toFixed(1)} kN.m`
-                    }
-                }
-            }
+function findClosestIndex(stations = [], target) {
+    if (!stations.length || !Number.isFinite(target)) return 0;
+    let bestIdx = 0;
+    let bestDelta = Infinity;
+    stations.forEach((value, index) => {
+        const delta = Math.abs(value - target);
+        if (delta < bestDelta) {
+            bestDelta = delta;
+            bestIdx = index;
         }
     });
-
-    // Grafico de Cortantes - LINHA COM FORMATO CORRETO
-    shearChart = new Chart(ctxShear, {
-        type: 'line',
-        data: {
-            labels: [],
-            datasets: [
-                {
-                    label: 'V_max',
-                    data: [],
-                    borderColor: '#4caf50',
-                    backgroundColor: 'rgba(76, 175, 80, 0.15)',
-                    fill: '+1',
-                    tension: 0,
-                    pointRadius: 4,
-                    pointBackgroundColor: '#4caf50',
-                    stepped: false
-                },
-                {
-                    label: 'V_min',
-                    data: [],
-                    borderColor: '#ff9800',
-                    backgroundColor: 'rgba(255, 152, 0, 0.15)',
-                    fill: 'origin',
-                    tension: 0,
-                    pointRadius: 4,
-                    pointBackgroundColor: '#ff9800',
-                    stepped: false
-                }
-            ]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            scales: {
-                y: {
-                    title: { display: true, text: 'Cortante (kN)' },
-                    grid: { color: 'rgba(0,0,0,0.1)' }
-                },
-                x: {
-                    type: 'linear',
-                    title: { display: true, text: 'Posição (m)' },
-                    grid: { color: 'rgba(0,0,0,0.05)' }
-                }
-            },
-            plugins: {
-                legend: { position: 'top', labels: { filter: (legendItem, data) => { const dataset = data.datasets[legendItem.datasetIndex]; return dataset && dataset.label; } } },
-                tooltip: {
-                    callbacks: {
-                        label: ctx => `x=${ctx.parsed.x.toFixed(1)} m, ${ctx.dataset.label}: ${ctx.parsed.y.toFixed(1)} kN`
-                    }
-                }
-            }
-        }
-    });
+    return bestIdx;
 }
 
-// Configura as abas dos gráficos
-function setupChartTabs() {
-    const chartToggles = document.querySelectorAll('.chart-toggle');
-    const chartContainers = {
-        'shear': document.getElementById('container-shear'),
-        'moment': document.getElementById('container-moment'),
-        'deflection': document.getElementById('container-deflection')
-    };
-    const chartTitle = document.getElementById('current-chart-title');
-    const chartSubtitle = document.getElementById('chart-subtitle');
-
-    chartToggles.forEach(toggle => {
-        toggle.addEventListener('click', () => {
-            // Atualizar botoes ativos
-            chartToggles.forEach(t => {
-                t.classList.remove('active', 'bg-white', 'shadow-sm', 'text-gray-800');
-                t.classList.add('text-gray-600', 'hover:bg-white', 'hover:shadow-sm');
-            });
-            toggle.classList.add('active', 'bg-white', 'shadow-sm', 'text-gray-800');
-            toggle.classList.remove('text-gray-600', 'hover:bg-white', 'hover:shadow-sm');
-
-            // Mostrar container alvo
-            const target = toggle.dataset.target;
-
-            Object.values(chartContainers).forEach(c => {
-                if (c) {
-                    c.classList.add('opacity-0', 'pointer-events-none');
-                    c.classList.remove('z-10');
-                    c.classList.add('z-0');
-                }
-            });
-
-            if (chartContainers[target]) {
-                chartContainers[target].classList.remove('opacity-0', 'pointer-events-none', 'z-0');
-                chartContainers[target].classList.add('z-10');
-            }
-
-            // Atualizar titulos
-            if (chartTitle) {
-                if (target === 'shear') chartTitle.innerText = 'Cortantes (kN)';
-                else if (target === 'moment') chartTitle.innerText = 'Momentos (kN.m)';
-                else if (target === 'deflection') chartTitle.innerText = 'Linha Elastica (cm)';
-            }
-            currentChartTarget = target;
-            updateChartFormula();
-            if (target === 'deflection') {
-                updateDeflectionChart();
-            }
-        });
-    });
-}
-
-// Grafico de Flecha
-function initDeflectionChart() {
-    const ctx = document.getElementById('chart-deflection')?.getContext('2d');
-    if (!ctx || deflectionChart) {
-        return;
-    }
-    deflectionChart = new Chart(ctx, {
-        type: 'line',
-        data: { labels: [], datasets: [{ label: 'Flecha', data: [], borderColor: '#9c27b0', backgroundColor: 'rgba(156, 39, 176, 0.1)', fill: true, tension: 0.4, pointRadius: 2 }] },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            scales: { y: { reverse: false, title: { display: true, text: 'Flecha (cm)' } }, x: { type: 'linear', title: { display: true, text: 'Posicao (m)' } } },
-            plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => `f=${ctx.parsed.y.toFixed(2)} cm` } } }
-        }
-    });
-}
-
-function updateDeflectionChart() {
-    if (!loadProcessor) return;
-    if (!deflectionChart) {
-        initDeflectionChart();
-    }
-    if (!deflectionChart) return;
-    try {
-        const elsData = loadProcessor.getLoadCaseData('ELS_QP');
-        // Se nao tiver ELS_QP, tentar usar DEAD como fallback seguro pra nao dar erro, mas idealmente deve ter ELS_QP
-        const dataToUse = (elsData && elsData.stations) ? elsData : loadProcessor.getLoadCaseData('DEAD');
-
-        if (!dataToUse || !dataToUse.stations) return;
-
-        // Calcular flecha
-        const bw = parseFloat(document.getElementById('inp-bw')?.value) || 30;
-        const h = parseFloat(document.getElementById('inp-h')?.value) || 60;
-        const cover = parseFloat(document.getElementById('inp-cover')?.value) || 3;
-        const fck = parseFloat(document.getElementById('inp-fck')?.value) || 30;
-        const fyk = parseFloat(document.getElementById('inp-fyk-long')?.value) || 500;
-        const nBars = parseInt(document.getElementById('inp-nbars')?.value) || 5;
-        const phi = parseFloat(document.getElementById('inp-phi')?.value) || 20;
-
-        const d = h - cover - 0.8 - (phi / 20);
-        const As = nBars * Math.PI * (phi / 20) ** 2;
-
-        const elsVerifier = new ServiceabilityVerifier({ bw, h, d }, { fck, fyk }, As, { phi });
-
-        // Momentos para flecha (ELS-QP)
-        const momentsQp = buildMomentSeries(dataToUse);
-        if (!momentsQp.length) return;
-
-        const result = buildDeflectionBySpans(
-            elsVerifier,
-            momentsQp,
-            loadProcessor.frames,
-            loadProcessor.totalLength
-        );
-
-        deflectionChart.data.labels = result.deflections.map(pt => pt.x);
-        deflectionChart.data.datasets[0].data = result.deflections.map(pt => ({ x: pt.x, y: pt.f }));
-        deflectionChart.update();
-
-    } catch (e) {
-        console.warn('Erro Deflection:', e);
-    }
-}
-
-function toPoints(stations, values) {
-    const points = [];
-    const safeStations = Array.isArray(stations) ? stations : [];
-    const safeValues = Array.isArray(values) ? values : [];
-    const count = Math.min(safeStations.length, safeValues.length);
-    for (let i = 0; i < count; i++) {
-        points.push({ x: safeStations[i], y: safeValues[i] });
-    }
-    return points;
-}
-
-function pickEnvelopeValue(maxVal, minVal) {
-    const maxSafe = Number.isFinite(maxVal) ? maxVal : 0;
-    const minSafe = Number.isFinite(minVal) ? minVal : 0;
-    return Math.abs(maxSafe) >= Math.abs(minSafe) ? maxSafe : minSafe;
-}
-
-function getMomentAtIndex(data, idx) {
-    if (!data || idx === null || idx === undefined) {
+function getCaseAtX(data, x) {
+    if (!data || !Array.isArray(data.stations) || !data.stations.length) {
         return null;
     }
-    if (Array.isArray(data.M_max) && Array.isArray(data.M_min)) {
-        return pickEnvelopeValue(data.M_max[idx], data.M_min[idx]);
-    }
-    if (Array.isArray(data.M_values)) {
-        const value = data.M_values[idx];
-        return Number.isFinite(value) ? value : 0;
-    }
-    return null;
-}
-
-function buildMomentSeries(data) {
-    if (!data || !Array.isArray(data.stations)) {
-        return [];
-    }
-    if (Array.isArray(data.M_max) && Array.isArray(data.M_min)) {
-        return data.stations.map((x, i) => ({
-            x,
-            M: pickEnvelopeValue(data.M_max[i], data.M_min[i])
-        }));
-    }
-    if (Array.isArray(data.M_values)) {
-        return data.stations.map((x, i) => ({
-            x,
-            M: Number.isFinite(data.M_values[i]) ? data.M_values[i] : 0
-        }));
-    }
-    return [];
-}
-
-function buildDeflectionBySpans(elsVerifier, moments, frames, totalLength) {
-    const spans = Array.isArray(frames) && frames.length
-        ? frames.map((frame) => {
-            const startX = Number.isFinite(frame.startX) ? frame.startX : 0;
-            const endX = Number.isFinite(frame.endX)
-                ? frame.endX
-                : (Number.isFinite(frame.length) ? startX + frame.length : totalLength || 0);
-            return { startX, endX };
-        })
-        : [{ startX: 0, endX: totalLength || 0 }];
-
-    const alpha_f = elsVerifier.calcCreepFactor();
-    const factor = 1 + alpha_f;
-
-    const deflections = [];
-    let worstUtil = 0;
-    let worstTotal = 0;
-    let worstLimit = 0;
-
-    for (const span of spans) {
-        const spanLength = span.endX - span.startX;
-        if (spanLength <= 0) {
-            continue;
-        }
-        const spanMoments = moments
-            .filter((pt) => pt.x >= span.startX - 1e-6 && pt.x <= span.endX + 1e-6)
-            .map((pt) => ({ x: pt.x - span.startX, M: pt.M }));
-
-        if (spanMoments.length < 2) {
-            continue;
-        }
-
-        const immediate = elsVerifier.calcDeflection(spanMoments, spanLength);
-        const spanDeflections = immediate.deflections.map((pt) => ({
-            x: pt.x + span.startX,
-            f: pt.f * factor
-        }));
-        deflections.push(...spanDeflections);
-
-        const f_total = Math.abs(immediate.maxDeflection) * factor;
-        const f_lim = (spanLength * 100) / 250;
-        const util = f_lim > 0 ? (f_total / f_lim) * 100 : 0;
-
-        if (util > worstUtil) {
-            worstUtil = util;
-            worstTotal = f_total;
-            worstLimit = f_lim;
-        }
-    }
-
-    deflections.sort((a, b) => a.x - b.x);
-
+    const idx = findClosestIndex(data.stations, x);
     return {
-        deflections,
-        f_total: worstTotal,
-        f_lim: worstLimit,
-        utilizacao: worstUtil,
-        status: worstUtil <= 100 ? 'OK' : 'FAIL'
+        M_max: data.M_max?.[idx] ?? 0,
+        M_min: data.M_min?.[idx] ?? 0,
+        V_max: data.V_max?.[idx] ?? 0,
+        V_min: data.V_min?.[idx] ?? 0
     };
 }
 
-function safeUtilization(value) {
-    return Number.isFinite(value) ? value : 0;
+function computeEffectiveDepth(inputs) {
+    const barDia = inputs.barPhi / 10;
+    const stirrDia = inputs.stirrPhi / 10;
+    return inputs.h - inputs.cover - stirrDia - barDia / 2;
 }
 
-function getCombinationFormula(loadCase) {
-    switch (loadCase) {
-        case 'ELU':
-            return 'ELU = 1.4*(G + Trilho) + 1.4*Q';
-        case 'FADIGA':
-            return 'Fadiga = 1.0*(G + Trilho) + 1.0*Q';
-        case 'ELS_QP':
-            return 'ELS-QP = 1.0*(G + Trilho) + 0.5*Q';
-        case 'ELS_FREQ':
-            return 'ELS-FREQ = 1.0*(G + Trilho) + 0.8*Q';
-        default:
-            return '';
-    }
+function computeAsProvided(inputs) {
+    const barDia = inputs.barPhi / 10;
+    return inputs.nBars * Math.PI * (barDia / 2) ** 2;
 }
 
-function updateChartFormula() {
-    const subtitle = document.getElementById('chart-subtitle');
-    if (!subtitle) return;
-    const formulaCase = currentChartTarget === 'deflection' ? 'ELS_QP' : currentLoadCase;
-    subtitle.textContent = getCombinationFormula(formulaCase);
+function computeStirrupAsw(inputs) {
+    const stirrDia = inputs.stirrPhi / 10;
+    const area = Math.PI * (stirrDia / 2) ** 2;
+    const legs = 2;
+    const spacing = inputs.stirrSpacing > 0 ? inputs.stirrSpacing : 1;
+    return (legs * area / spacing) * 100;
 }
 
-/**
- * Atualiza os graficos para um caso de carga
- */
-function updateCharts(loadCase) {
-    const data = loadProcessor.getLoadCaseData(loadCase);
-    const stations = Array.isArray(data.stations) ? data.stations : [];
-
-    const isEnvelope = data.M_max && data.M_max.length > 0;
-
-    // Momentos
-    momentChart.data.labels = [];
-    if (isEnvelope) {
-        momentChart.data.datasets[0].data = toPoints(stations, data.M_max);
-        momentChart.data.datasets[1].data = toPoints(stations, data.M_min);
-        momentChart.data.datasets[0].label = 'M_max';
-        momentChart.data.datasets[1].label = 'M_min';
-        momentChart.data.datasets[1].hidden = false;
-    } else {
-        momentChart.data.datasets[0].data = toPoints(stations, data.M_values);
-        momentChart.data.datasets[0].label = 'Momento';
-        momentChart.data.datasets[1].data = [];
-        momentChart.data.datasets[1].hidden = true;
-    }
-    momentChart.update();
-
-    // Cortantes
-    shearChart.data.labels = [];
-    if (isEnvelope) {
-        shearChart.data.datasets[0].data = toPoints(stations, data.V_max);
-        shearChart.data.datasets[1].data = toPoints(stations, data.V_min);
-        shearChart.data.datasets[0].label = 'V_max';
-        shearChart.data.datasets[1].label = 'V_min';
-        shearChart.data.datasets[1].hidden = false;
-    } else {
-        shearChart.data.datasets[0].data = toPoints(stations, data.V_values);
-        shearChart.data.datasets[0].label = 'Cortante';
-        shearChart.data.datasets[1].data = [];
-        shearChart.data.datasets[1].hidden = true;
-    }
-    shearChart.update();
-}
-
-/**
- * Renderiza os botÃµes de filtro de casos de carga
- */
-function renderLoadCaseFilters() {
-    const container = document.getElementById('load-case-filters');
-    const loadCases = loadProcessor.getAvailableLoadCases();
-
-    let html = '';
-    for (const lc of loadCases) {
-        const isActive = lc.id === currentLoadCase;
-        const activeClass = isActive ? 'bg-primary text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200';
-        html += `
-            <button data-loadcase="${lc.id}" 
-                    class="load-case-btn px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${activeClass}"
-                    style="${isActive ? '' : `border-left: 3px solid ${lc.color}`}">
-                ${lc.label}
-            </button>
-        `;
-    }
-    container.innerHTML = html;
-
-    // Event listeners
-    container.querySelectorAll('.load-case-btn').forEach(btn => {
-        btn.addEventListener('click', (e) => {
-            currentLoadCase = e.target.dataset.loadcase;
-            renderLoadCaseFilters();
-            updateCharts(currentLoadCase);
-            updateChartFormula();
-            updateCriticalSections();
-            updateDeflectionChart(); // Atualiza flecha sempre que trocar caso
-        });
-    });
-}
-
-/**
- * Cria um card de seÃ§Ã£o crÃ­tica
- */
-function createSectionCard(section, results) {
-    const allOk = results.every(r => r.status === 'OK');
-    const borderColor = allOk ? 'border-green-400' : 'border-red-400';
-    const bgColor = allOk ? 'bg-green-50' : 'bg-red-50';
-
-    let itemsHtml = '';
-    for (const result of results) {
-        const statusColor = result.status === 'OK' ? 'bg-green-500' : 'bg-red-500';
-        const barWidth = Math.min(result.utilizacao, 100);
-        const barColor = result.utilizacao <= 100 ? 'bg-green-400' : 'bg-red-400';
-
-        itemsHtml += `
-            <div class="py-2 border-b last:border-b-0">
-                <div class="flex justify-between items-center mb-1">
-                    <span class="text-sm text-gray-700">${result.name}</span>
-                    <span class="text-xs px-2 py-0.5 rounded ${statusColor} text-white">${result.status}</span>
-                </div>
-                <div class="flex items-center gap-2">
-                    <div class="flex-1 h-2 bg-gray-200 rounded-full overflow-hidden">
-                        <div class="h-full ${barColor} transition-all" style="width: ${barWidth}%"></div>
-                    </div>
-                    <span class="text-xs text-gray-500 w-12 text-right">${result.utilizacao.toFixed(0)}%</span>
-                </div>
-            </div>
-        `;
-    }
+function buildUtilRow(label, util, ok) {
+    const safeUtil = Number.isFinite(util) ? util : 0;
+    const clamped = clamp(safeUtil, 0, 100);
+    const barClass = ok ? 'bg-emerald-500' : 'bg-rose-500';
+    const badgeClass = ok ? 'bg-emerald-500' : 'bg-rose-500';
+    const badgeLabel = ok ? 'OK' : 'ALERTA';
 
     return `
-        <div class="border-2 ${borderColor} ${bgColor} rounded-lg p-4">
-            <div class="flex justify-between items-start mb-3">
-                <div>
-                    <h4 class="font-semibold text-gray-800">${section.name}</h4>
-                    <p class="text-xs text-gray-500">x = ${section.x.toFixed(1)} m</p>
+        <div class="grid grid-cols-[1fr_auto] gap-2 items-center">
+            <div>
+                <div class="flex items-center justify-between text-xs text-gray-600">
+                    <span>${label}</span>
+                    <span class="text-[10px] font-semibold px-2 py-0.5 rounded ${badgeClass} text-white">${badgeLabel}</span>
                 </div>
-                <span class="text-lg">${allOk ? 'OK' : 'X'}</span>
+                <div class="h-2 bg-gray-200 rounded-full overflow-hidden mt-1">
+                    <div class="h-2 ${barClass} progress-bar" style="width: ${clamped}%"></div>
+                </div>
             </div>
-            <div class="space-y-1">
-                ${itemsHtml}
-            </div>
-            <div class="mt-3 pt-2 border-t text-xs text-gray-600">
-                M = ${section.M_max.toFixed(1)} / ${section.M_min.toFixed(1)} kN.m<br>
-                V = ${section.V_max.toFixed(1)} / ${section.V_min.toFixed(1)} kN
-            </div>
+            <div class="text-xs text-gray-500 w-10 text-right">${Math.round(safeUtil)}%</div>
         </div>
     `;
 }
 
-/**
- * Atualiza as seÃ§Ãµes crÃ­ticas
- */
-function updateCriticalSections() {
-    const bw = parseFloat(document.getElementById('inp-bw').value);
-    const h = parseFloat(document.getElementById('inp-h').value);
-    const cover = parseFloat(document.getElementById('inp-cover').value);
-    const fck = parseFloat(document.getElementById('inp-fck').value);
-    const fykLong = parseFloat(document.getElementById('inp-fyk-long').value);
-    const fykStirr = parseFloat(document.getElementById('inp-fyk-stirr').value);
-    const nBars = parseInt(document.getElementById('inp-nbars').value);
-    const phi = parseFloat(document.getElementById('inp-phi').value);
-    const stirrPhi = parseFloat(document.getElementById('inp-stirr-phi').value);
+function updateCriticalSections(sections = null) {
+    const container = document.getElementById('critical-sections');
+    if (!container || !loadProcessor) return;
 
-    const coverVal = Number.isFinite(cover) ? cover : 3;
-    const barDia = Number.isFinite(phi) ? phi / 10 : 2;
-    const stirrDia = Number.isFinite(stirrPhi) ? stirrPhi / 10 : 0.8;
-    const d = h - coverVal - stirrDia - (barDia / 2);
-    const As = nBars * Math.PI * (phi / 20) ** 2;
-
-    const fykLongVal = Number.isFinite(fykLong) ? fykLong : 500;
-    const fykStirrVal = Number.isFinite(fykStirr) ? fykStirr : 500;
-    const geometry = { bw, h, d };
-    const materials = { fck, fyk: fykLongVal, fywk: fykStirrVal };
-
-    // Usar ELU para verificaÃ§Ãµes
-    const criticalSections = loadProcessor.findCriticalSections();
-
-    const sectionsContainer = document.getElementById('critical-sections');
-    sectionsContainer.innerHTML = '';
-
-    const elsQpData = loadProcessor.getLoadCaseData('ELS_QP');
-    const elsVerifierGlobal = new ServiceabilityVerifier(geometry, materials, As, { phi });
-    let deflectionResult = null;
-    if (elsQpData && Array.isArray(elsQpData.stations)) {
-        const momentsQp = buildMomentSeries(elsQpData);
-        if (momentsQp.length) {
-            deflectionResult = buildDeflectionBySpans(
-                elsVerifierGlobal,
-                momentsQp,
-                loadProcessor.frames,
-                loadProcessor.totalLength
-            );
-        }
+    const items = sections || loadProcessor.findCriticalSections();
+    if (!items.length) {
+        container.innerHTML = `
+            <div class="text-gray-400 text-center py-8 col-span-full">
+                Clique em "CALCULAR" para gerar a análise
+            </div>
+        `;
+        return;
     }
 
-    for (const section of criticalSections) {
-        const results = [];
+    const inputs = getDetailInputs();
+    const fck = getNumericValue('inp-fck', 30);
+    const d = computeEffectiveDepth(inputs);
+    const AsProv = computeAsProvided(inputs);
+    const Asw_s = computeStirrupAsw(inputs);
+    const fatigueData = loadProcessor.getLoadCaseData('FADIGA');
 
-        const Md = Math.max(Math.abs(section.M_max), Math.abs(section.M_min));
-        const Vd = Math.max(Math.abs(section.V_max), Math.abs(section.V_min));
+    container.innerHTML = items.map((section) => {
+        const momentAbs = Math.max(Math.abs(section.M_max || 0), Math.abs(section.M_min || 0));
+        const bendingVerifier = new BendingVerifier(
+            { bw: inputs.bw, h: inputs.h, d: d, c_nom: inputs.cover },
+            { fck: fck, fyk: inputs.fykLong }
+        );
+        const flexResult = bendingVerifier.verifySection(momentAbs, AsProv);
+        const flexUtil = flexResult.utilizacao || 0;
+        const flexOk = flexResult.status === 'OK';
 
-        // Flexão
-        const bendingVerifier = new BendingVerifier(geometry, materials);
-        const bendingResult = bendingVerifier.verifySection(Md, As);
-        results.push({
-            name: 'Flexão ELU',
-            status: bendingResult.status,
-            utilizacao: bendingResult.utilizacao
+        const Vsd = Math.max(Math.abs(section.V_max || 0), Math.abs(section.V_min || 0));
+        const shearVerifier = new ShearVerifier(
+            { bw: inputs.bw, h: inputs.h, d: d },
+            { fck: fck, fywk: inputs.fykStirr }
+        );
+        const shearResult = shearVerifier.designStirrupsELU(Vsd);
+        const AswFinal = Number.isFinite(shearResult.Asw_final) ? shearResult.Asw_final : 0;
+        const shearUtil = Asw_s > 0 ? (AswFinal / Asw_s) * 100 : 0;
+        const bielaUtil = Number.isFinite(shearResult.ratioBiela) ? shearResult.ratioBiela : 0;
+        const shearUtilMax = Math.max(shearUtil, bielaUtil);
+        const shearOk = shearResult.status === 'OK' && shearUtilMax <= 100;
+
+        const fatigueAtX = getCaseAtX(fatigueData, section.x);
+        const fatigueMmax = fatigueAtX ? fatigueAtX.M_max : section.M_max;
+        const fatigueMmin = fatigueAtX ? fatigueAtX.M_min : section.M_min;
+        const fatigueVerifier = new FatigueVerifier(
+            { bw: inputs.bw, h: inputs.h, d: d },
+            { fck: fck, fyk: inputs.fykLong },
+            AsProv,
+            inputs.barPhi
+        );
+        const fatigueResult = fatigueVerifier.verifySteelFatigue(fatigueMmax || 0, fatigueMmin || 0);
+        const fatigueUtil = fatigueResult.utilizacao || 0;
+        const fatigueOk = fatigueResult.status === 'OK';
+
+        const cardOk = flexOk && shearOk && fatigueOk;
+        const cardClass = cardOk ? 'border-emerald-200 bg-emerald-50' : 'border-amber-200 bg-amber-50';
+        const badgeClass = cardOk ? 'bg-emerald-500' : 'bg-amber-500';
+        const badgeLabel = cardOk ? 'OK' : 'ALERTA';
+
+        return `
+            <button type="button" data-section-id="${section.id}" class="section-card border ${cardClass} rounded-lg p-4 text-left w-full">
+                <div class="flex items-start justify-between">
+                    <div>
+                        <div class="text-sm font-semibold text-gray-800">${section.name}</div>
+                        <div class="text-xs text-gray-500">x = ${section.x.toFixed(1)} m</div>
+                    </div>
+                    <span class="text-[10px] font-semibold px-2 py-1 rounded ${badgeClass} text-white">${badgeLabel}</span>
+                </div>
+                <div class="mt-3 space-y-2">
+                    ${buildUtilRow('Flexão ELU', flexUtil, flexOk)}
+                    ${buildUtilRow('Cisalhamento', shearUtilMax, shearOk)}
+                    ${buildUtilRow('Fadiga Aço', fatigueUtil, fatigueOk)}
+                </div>
+                <div class="mt-3 text-xs text-gray-500">
+                    M = ${formatNumber(section.M_max)} / ${formatNumber(section.M_min)} kN.m<br>
+                    V = ${formatNumber(section.V_max)} / ${formatNumber(section.V_min)} kN
+                </div>
+            </button>
+        `;
+    }).join('');
+
+    container.querySelectorAll('.section-card').forEach((card) => {
+        card.addEventListener('click', () => {
+            const id = card.dataset.sectionId;
+            if (!id) return;
+            selectedDetailSectionId = id;
+            renderDetailSectionList();
+            updateDetailView();
+            const detailsTab = document.querySelector('.tab-btn[data-tab="details"]');
+            if (detailsTab) detailsTab.click();
         });
-
-        // Cisalhamento
-        const shearVerifier = new ShearVerifier(geometry, materials);
-        const shearResult = shearVerifier.designStirrupsELU(Vd);
-        results.push({
-            name: 'Cisalhamento',
-            status: shearResult.status,
-            utilizacao: shearResult.ratioBiela
-        });
-
-        // Fadiga
-        const fatigueData = loadProcessor.getLoadCaseData('FADIGA');
-        if (fatigueData && fatigueData.stations) {
-            const idx = fatigueData.stations.findIndex(x => Math.abs(x - section.x) < 0.1);
-            if (idx >= 0) {
-                const fatigueVerifier = new FatigueVerifier(geometry, materials, As, phi);
-                const fatigueResult = fatigueVerifier.verifySteelFatigue(
-                    fatigueData.M_max[idx],
-                    fatigueData.M_min[idx]
-                );
-                results.push({
-                    name: 'Fadiga Aço',
-                    status: fatigueResult.status,
-                    utilizacao: fatigueResult.utilizacao
-                });
-                const concreteResult = fatigueVerifier.verifyConcreteCompressionFatigue(
-                    fatigueData.M_max[idx]
-                );
-                results.push({
-                    name: 'Fadiga Concreto (Compressao)',
-                    status: concreteResult.status,
-                    utilizacao: safeUtilization(concreteResult.utilizacao)
-                });
-
-                const crackingResult = fatigueVerifier.checkCrackingFatigue(
-                    fatigueData.M_max[idx]
-                );
-                const crackingUtil = safeUtilization(
-                    (crackingResult.sigmaTraction / crackingResult.limite) * 100
-                );
-                results.push({
-                    name: 'Fadiga Concreto (Fissuracao)',
-                    status: crackingResult.cracked ? 'FAIL' : 'OK',
-                    utilizacao: crackingUtil
-                });
-            }
-        }
-
-        // Fissuracao (ELS-FREQ)
-        const elsFreqData = loadProcessor.getLoadCaseData('ELS_FREQ');
-        if (elsFreqData && elsFreqData.stations) {
-            const idxEls = elsFreqData.stations.findIndex(x => Math.abs(x - section.x) < 0.1);
-            if (idxEls >= 0) {
-                const M_freq = getMomentAtIndex(elsFreqData, idxEls);
-                if (M_freq !== null) {
-                    const crackResult = elsVerifierGlobal.verifyCrackWidth(M_freq);
-
-                    results.push({
-                        name: 'Abertura de Fissura',
-                        status: crackResult.status,
-                        utilizacao: safeUtilization(crackResult.utilizacao)
-                    });
-                }
-            }
-        }
-
-        // Flecha (ELS-QP)
-        if (deflectionResult) {
-            results.push({
-                name: 'Flecha (ELS-QP)',
-                status: deflectionResult.status,
-                utilizacao: safeUtilization(deflectionResult.utilizacao)
-            });
-        }
-
-        sectionsContainer.innerHTML += createSectionCard(section, results);
-    }
+    });
 }
 
 /**
- * Executa o cÃ¡lculo completo
+ * Executa o cálculo completo
  */
 function runCalculation() {
     if (!loadProcessor) {
@@ -858,71 +600,68 @@ function runCalculation() {
     }
     loadProcessor.processGlobalGeometry();
 
-    // Renderizar filtros
     renderLoadCaseFilters();
-
-    // Atualizar grÃ¡ficos com caso atual
     updateCharts(currentLoadCase);
-    updateChartFormula();
 
-    // Info da viga
     const infoBeam = document.getElementById('info-beam');
     const summary = loadProcessor.getSummary();
-    const As = parseInt(document.getElementById('inp-nbars').value) *
-        Math.PI * (parseFloat(document.getElementById('inp-phi').value) / 20) ** 2;
+    const nBars = parseInt(document.getElementById('inp-nbars')?.value || '0', 10);
+    const barPhi = parseFloat(document.getElementById('inp-phi')?.value || '0');
+    const barDia = barPhi / 10;
+    const As = nBars > 0 ? nBars * Math.PI * (barDia / 2) ** 2 : 0;
 
-    infoBeam.innerHTML = `
-        <strong>Viga Contínua:</strong> ${summary.totalLength}m<br>
-        <strong>Frames:</strong> ${summary.numFrames}<br>
-        <strong>As provida:</strong> ${As.toFixed(2)} cmÂ²
-    `;
-    infoBeam.classList.remove('hidden');
-
-    // Atualizar secoes criticas
-    updateCriticalSections();
-
-    // Atualizar grafico de flecha
-    updateDeflectionChart();
-
-    // Mostrar resumo
-    document.getElementById('summary-panel').classList.remove('hidden');
-    const summaryPlaceholder = document.getElementById('summary-placeholder');
-    if (summaryPlaceholder) {
-        summaryPlaceholder.classList.add('hidden');
+    if (infoBeam) {
+        infoBeam.innerHTML = `
+            <strong>Viga Contínua:</strong> ${summary.totalLength} m<br>
+            <strong>Frames:</strong> ${summary.numFrames}<br>
+            <strong>A<sub>s</sub> provida:</strong> ${As.toFixed(2)} cm<sup>2</sup>
+        `;
+        infoBeam.classList.remove('hidden');
     }
+
+    const sections = loadProcessor.findCriticalSections();
+    updateCriticalSections(sections);
     updateSummary();
-    refreshDetailSections();
+    refreshDetailSections(sections);
 }
 
 /**
  * Atualiza o painel de resumo
  */
 function updateSummary() {
-    const data = loadProcessor.getLoadCaseData('ELU');
-    const summaryContent = document.getElementById('summary-content');
+    const summaryContent = document.getElementById('detail-summary');
+    if (!summaryContent || !loadProcessor) {
+        return;
+    }
+    const data = loadProcessor.getLoadCaseData('ELU') || {};
+    const MmaxValues = data.M_max || [];
+    const MminValues = data.M_min || [];
+    const VmaxValues = data.V_max || [];
+    const VminValues = data.V_min || [];
 
-    const M_max = Math.max(...data.M_max);
-    const M_min = Math.min(...data.M_min);
-    const V_max = Math.max(...data.V_max.map(Math.abs), ...data.V_min.map(Math.abs));
+    const M_max = MmaxValues.length ? Math.max(...MmaxValues) : 0;
+    const M_min = MminValues.length ? Math.min(...MminValues) : 0;
+    const V_max = Math.max(
+        VmaxValues.length ? Math.max(...VmaxValues.map(Math.abs)) : 0,
+        VminValues.length ? Math.max(...VminValues.map(Math.abs)) : 0
+    );
 
     summaryContent.innerHTML = `
-        <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div class="text-center p-3 bg-blue-50 rounded-lg">
-                <p class="text-2xl font-bold text-blue-700">${loadProcessor.totalLength}m</p>
-                <p class="text-xs text-gray-500">Comprimento Total</p>
-            </div>
-            <div class="text-center p-3 bg-green-50 rounded-lg">
-                <p class="text-2xl font-bold text-green-700">${M_max.toFixed(0)}</p>
-                <p class="text-xs text-gray-500">M_max ELU (kN.m)</p>
-            </div>
-            <div class="text-center p-3 bg-red-50 rounded-lg">
-                <p class="text-2xl font-bold text-red-700">${M_min.toFixed(0)}</p>
-                <p class="text-xs text-gray-500">M_min ELU (kN.m)</p>
-            </div>
-            <div class="text-center p-3 bg-orange-50 rounded-lg">
-                <p class="text-2xl font-bold text-orange-700">${V_max.toFixed(0)}</p>
-                <p class="text-xs text-gray-500">V_max ELU (kN)</p>
-            </div>
+        <div class="bg-blue-50 rounded-lg p-3 text-center">
+            <div class="text-xs text-gray-500">Comprimento Total</div>
+            <div class="text-lg font-semibold text-blue-700">${loadProcessor.totalLength} m</div>
+        </div>
+        <div class="bg-green-50 rounded-lg p-3 text-center">
+            <div class="text-xs text-gray-500">M<sub>max</sub> ELU (kN.m)</div>
+            <div class="text-lg font-semibold text-green-700">${M_max.toFixed(0)}</div>
+        </div>
+        <div class="bg-red-50 rounded-lg p-3 text-center">
+            <div class="text-xs text-gray-500">M<sub>min</sub> ELU (kN.m)</div>
+            <div class="text-lg font-semibold text-red-700">${M_min.toFixed(0)}</div>
+        </div>
+        <div class="bg-orange-50 rounded-lg p-3 text-center">
+            <div class="text-xs text-gray-500">V<sub>max</sub> ELU (kN)</div>
+            <div class="text-lg font-semibold text-orange-700">${V_max.toFixed(0)}</div>
         </div>
     `;
 }
@@ -1278,6 +1017,102 @@ function renderSectionSvg(inputs) {
         });
     }
 
+    const dimColor = '#64748b';
+    const tick = 5;
+    const drawDimHorizontal = (x1, x2, y, label) => {
+        const x1p = toX(x1);
+        const x2p = toX(x2);
+        const yp = toY(y);
+        svg.appendChild(createSvgElement('line', {
+            x1: x1p,
+            y1: yp,
+            x2: x2p,
+            y2: yp,
+            stroke: dimColor,
+            'stroke-width': 1
+        }));
+        svg.appendChild(createSvgElement('line', {
+            x1: x1p,
+            y1: yp - tick,
+            x2: x1p,
+            y2: yp + tick,
+            stroke: dimColor,
+            'stroke-width': 1
+        }));
+        svg.appendChild(createSvgElement('line', {
+            x1: x2p,
+            y1: yp - tick,
+            x2: x2p,
+            y2: yp + tick,
+            stroke: dimColor,
+            'stroke-width': 1
+        }));
+        const labelEl = createSvgElement('text', {
+            x: (x1p + x2p) / 2,
+            y: yp - 6,
+            'text-anchor': 'middle',
+            'font-size': 10,
+            fill: dimColor
+        });
+        labelEl.textContent = label;
+        svg.appendChild(labelEl);
+    };
+
+    const drawDimVertical = (x, y1, y2, label) => {
+        const xp = toX(x);
+        const y1p = toY(y1);
+        const y2p = toY(y2);
+        svg.appendChild(createSvgElement('line', {
+            x1: xp,
+            y1: y1p,
+            x2: xp,
+            y2: y2p,
+            stroke: dimColor,
+            'stroke-width': 1
+        }));
+        svg.appendChild(createSvgElement('line', {
+            x1: xp - tick,
+            y1: y1p,
+            x2: xp + tick,
+            y2: y1p,
+            stroke: dimColor,
+            'stroke-width': 1
+        }));
+        svg.appendChild(createSvgElement('line', {
+            x1: xp - tick,
+            y1: y2p,
+            x2: xp + tick,
+            y2: y2p,
+            stroke: dimColor,
+            'stroke-width': 1
+        }));
+        const labelEl = createSvgElement('text', {
+            x: xp - 6,
+            y: (y1p + y2p) / 2,
+            'text-anchor': 'end',
+            'font-size': 10,
+            fill: dimColor
+        });
+        labelEl.textContent = label;
+        svg.appendChild(labelEl);
+    };
+
+    if (cover > 0) {
+        const coverY1 = momentPositive === false ? 0 : h - cover;
+        const coverY2 = momentPositive === false ? cover : h;
+        drawDimVertical(-2, coverY1, coverY2, `c = ${cover.toFixed(1)} cm`);
+    }
+
+    if (basePositions.length >= 2) {
+        const spacingVal = basePositions[1] - basePositions[0];
+        if (spacingVal > 0) {
+            const dimOffset = barDia * 1.6;
+            let dimY = momentPositive === false ? startY + dimOffset : startY - dimOffset;
+            dimY = Math.max(yTop + barDia, Math.min(yBottom - barDia, dimY));
+            drawDimHorizontal(basePositions[0], basePositions[1], dimY, `s = ${spacingVal.toFixed(1)} cm`);
+        }
+    }
+
     if (Number.isFinite(neutralAxis) && neutralAxis > 0) {
         const axisFromTop = momentPositive === false ? (h - neutralAxis) : neutralAxis;
         const axisY = toY(axisFromTop);
@@ -1409,8 +1244,8 @@ function updateDetailView() {
     renderDomainPanel(section, momentInfo, domainData);
 }
 
-function refreshDetailSections() {
-    detailSections = loadProcessor ? loadProcessor.findCriticalSections() : [];
+function refreshDetailSections(sections = null) {
+    detailSections = sections || (loadProcessor ? loadProcessor.findCriticalSections() : []);
     if (!detailSections.length) {
         selectedDetailSectionId = null;
     } else if (!selectedDetailSectionId || !detailSections.find(section => section.id === selectedDetailSectionId)) {
@@ -1566,10 +1401,8 @@ function setupResizers() {
 document.addEventListener('DOMContentLoaded', () => {
     updateLayoutMetrics();
     initCharts();
-    initDeflectionChart();
     setupExcelUpload();
     setupTabs();
-    setupChartTabs();
     setupResizers();
     setupDetailInputs();
     setupDomainImageFallback();
@@ -1577,4 +1410,6 @@ document.addEventListener('DOMContentLoaded', () => {
     runCalculation();
     window.addEventListener('resize', updateLayoutMetrics);
 });
+
+
 
