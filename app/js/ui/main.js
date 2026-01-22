@@ -767,6 +767,34 @@ function computeDomainData(inputs, momentValue) {
     return { ...design, d, domain, xi_23: xi23 };
 }
 
+function computeDomainStrains(xi, xi23 = 0.259) {
+    const eps_cu = 3.5;
+    const eps_s_max = 10.0;
+
+    if (!Number.isFinite(xi) || xi <= 0) {
+        return null;
+    }
+
+    let eps_c = eps_cu;
+    let eps_s = (eps_cu * (1 - xi)) / xi;
+    if (xi <= xi23) {
+        eps_s = eps_s_max;
+        eps_c = (eps_s * xi) / (1 - xi);
+    }
+
+    const eps_c_clamped = Math.min(Math.max(eps_c, 0), eps_cu);
+    const eps_s_clamped = Math.min(Math.max(eps_s, 0), eps_s_max);
+
+    return {
+        eps_c,
+        eps_s,
+        eps_c_clamped,
+        eps_s_clamped,
+        eps_cu,
+        eps_s_max
+    };
+}
+
 function updateDomainOverlay(domainData) {
     const line = document.getElementById('domain-line');
     if (!line) return;
@@ -778,28 +806,27 @@ function updateDomainOverlay(domainData) {
 
     // Calibrated for app/assets/dominio-nbr.png
     const map = {
-        x_left: 3.0,
+        x_left: 5.45,
         x_zero: 67.3,
         x_ecu: 87.9,
         y_top: 17.9,
         y_bottom: 92.3
     };
 
-    const eps_cu = 3.5;
-    const eps_s_max = 10.0;
-
     const xi = domainData.xi;
     const xi23 = Number.isFinite(domainData.xi_23) ? domainData.xi_23 : 0.259;
-
-    let eps_c = eps_cu;
-    let eps_s = (eps_cu * (1 - xi)) / xi;
-    if (Number.isFinite(xi) && xi > 0 && xi <= xi23) {
-        eps_s = eps_s_max;
-        eps_c = (eps_s * xi) / (1 - xi);
+    const strains = computeDomainStrains(xi, xi23);
+    if (!strains) {
+        line.setAttribute('opacity', '0');
+        return;
     }
 
-    const eps_c_clamped = Math.min(Math.max(eps_c, 0), eps_cu);
-    const eps_s_clamped = Math.min(Math.max(eps_s, 0), eps_s_max);
+    const {
+        eps_cu,
+        eps_s_max,
+        eps_c_clamped,
+        eps_s_clamped
+    } = strains;
 
     const topX = map.x_zero + (eps_c_clamped / eps_cu) * (map.x_ecu - map.x_zero);
     const bottomX = map.x_zero - (eps_s_clamped / eps_s_max) * (map.x_zero - map.x_left);
@@ -826,6 +853,9 @@ function renderDomainPanel(section, momentInfo, domainData) {
     const domainLabel = domainData ? domainData.domain : 'N/A';
     const xi = domainData && Number.isFinite(domainData.xi) ? domainData.xi : null;
     const x = domainData && Number.isFinite(domainData.x) ? domainData.x : null;
+    const strains = domainData ? computeDomainStrains(domainData.xi, domainData.xi_23) : null;
+    const eps_s = strains ? strains.eps_s_clamped : null;
+    const eps_c = strains ? strains.eps_c_clamped : null;
 
     text.innerHTML = `
         <div class="text-sm font-semibold text-gray-800">Domínio ${domainLabel}</div>
@@ -833,6 +863,8 @@ function renderDomainPanel(section, momentInfo, domainData) {
         <div class="text-xs text-gray-500">Face comprimida: ${face}</div>
         ${x !== null ? `<div class="text-xs text-gray-500">Linha neutra: x = ${x.toFixed(2)} cm</div>` : ''}
         ${xi !== null ? `<div class="text-xs text-gray-500">x/d = ${xi.toFixed(3)}</div>` : ''}
+        ${eps_s !== null ? `<div class="text-xs text-gray-500">eps_s (aco): ${eps_s.toFixed(3)} permil</div>` : ''}
+        ${eps_c !== null ? `<div class="text-xs text-gray-500">eps_c (conc): ${eps_c.toFixed(3)} permil</div>` : ''}
     `;
     updateDomainOverlay(domainData);
 }
