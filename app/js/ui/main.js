@@ -764,7 +764,7 @@ function computeDomainData(inputs, momentValue) {
         domain = 'IV';
     }
 
-    return { ...design, d, domain };
+    return { ...design, d, domain, xi_23: xi23 };
 }
 
 function updateDomainOverlay(domainData) {
@@ -776,17 +776,38 @@ function updateDomainOverlay(domainData) {
         return;
     }
 
-    const xiLim = domainData.xi_lim || 0.45;
-    const ratio = Math.max(0, Math.min(1, domainData.xi / xiLim));
-    const startX = 10;
-    const startY = 90;
-    const endX = 10 + 80 * ratio;
-    const endY = 10;
+    // Calibrated for app/assets/dominio-nbr.png
+    const map = {
+        x_left: 3.0,
+        x_zero: 67.3,
+        x_ecu: 87.9,
+        y_top: 17.9,
+        y_bottom: 92.3
+    };
 
-    line.setAttribute('x1', startX);
-    line.setAttribute('y1', startY);
-    line.setAttribute('x2', endX);
-    line.setAttribute('y2', endY);
+    const eps_cu = 3.5;
+    const eps_s_max = 10.0;
+
+    const xi = domainData.xi;
+    const xi23 = Number.isFinite(domainData.xi_23) ? domainData.xi_23 : 0.259;
+
+    let eps_c = eps_cu;
+    let eps_s = (eps_cu * (1 - xi)) / xi;
+    if (Number.isFinite(xi) && xi > 0 && xi <= xi23) {
+        eps_s = eps_s_max;
+        eps_c = (eps_s * xi) / (1 - xi);
+    }
+
+    const eps_c_clamped = Math.min(Math.max(eps_c, 0), eps_cu);
+    const eps_s_clamped = Math.min(Math.max(eps_s, 0), eps_s_max);
+
+    const topX = map.x_zero + (eps_c_clamped / eps_cu) * (map.x_ecu - map.x_zero);
+    const bottomX = map.x_zero - (eps_s_clamped / eps_s_max) * (map.x_zero - map.x_left);
+
+    line.setAttribute('x1', bottomX);
+    line.setAttribute('y1', map.y_bottom);
+    line.setAttribute('x2', topX);
+    line.setAttribute('y2', map.y_top);
     line.setAttribute('opacity', '1');
 }
 

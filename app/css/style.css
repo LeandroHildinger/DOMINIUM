@@ -344,7 +344,7 @@ body {
 
 #domain-line {
     stroke: #e11d48;
-    stroke-width: 2.2;
+    stroke-width: 1;
 }
 
 @media (max-width: 1024px) {
