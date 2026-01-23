@@ -405,16 +405,67 @@ function initCharts() {
 
 // Configura as abas dos gráficos
 function setupChartTabs() {
-    const chartToggles = document.querySelectorAll('.chart-toggle');
+    updateChartToggleButtons(currentLoadCase);
+}
+
+/**
+ * Atualiza os botões de toggle dos gráficos baseado no caso de carga
+ * @param {string} loadCase - ID do caso de carga atual
+ */
+function updateChartToggleButtons(loadCase) {
+    const container = document.querySelector('.chart-toggle')?.parentElement;
+    if (!container) return;
+
+    const showDeflection = loadCase === 'ELS_QP';
+
+    // Gerar botões dinamicamente
+    let buttonsHtml = `
+        <button class="px-3 py-1 text-xs font-medium rounded-md bg-white shadow-sm text-gray-800 transition-all chart-toggle active" data-target="shear">Cortantes</button>
+        <button class="px-3 py-1 text-xs font-medium rounded-md text-gray-600 hover:bg-white hover:shadow-sm transition-all chart-toggle" data-target="moment">Momentos</button>
+    `;
+
+    if (showDeflection) {
+        buttonsHtml += `
+            <button class="px-3 py-1 text-xs font-medium rounded-md text-gray-600 hover:bg-white hover:shadow-sm transition-all chart-toggle" data-target="deflection">Flecha</button>
+        `;
+    }
+
+    container.innerHTML = buttonsHtml;
+
+    // Re-adicionar event listeners
+    const chartToggles = container.querySelectorAll('.chart-toggle');
     const chartContainers = {
         'shear': document.getElementById('container-shear'),
         'moment': document.getElementById('container-moment'),
         'deflection': document.getElementById('container-deflection')
     };
     const chartTitle = document.getElementById('current-chart-title');
-    const chartSubtitle = document.getElementById('chart-subtitle');
+    const deflectionInfo = document.getElementById('deflection-els-info');
+
+    // Se não está em Flecha QP mas estava mostrando deflection, voltar para shear
+    if (!showDeflection && currentChartTarget === 'deflection') {
+        currentChartTarget = 'shear';
+        // Mostrar container de shear
+        Object.values(chartContainers).forEach(c => {
+            if (c) {
+                c.classList.add('opacity-0', 'pointer-events-none', 'z-0');
+                c.classList.remove('z-10');
+            }
+        });
+        if (chartContainers['shear']) {
+            chartContainers['shear'].classList.remove('opacity-0', 'pointer-events-none', 'z-0');
+            chartContainers['shear'].classList.add('z-10');
+        }
+        if (chartTitle) chartTitle.innerText = 'Cortantes (kN)';
+    }
 
     chartToggles.forEach(toggle => {
+        // Marcar botão ativo correto
+        if (toggle.dataset.target === currentChartTarget) {
+            toggle.classList.add('active', 'bg-white', 'shadow-sm', 'text-gray-800');
+            toggle.classList.remove('text-gray-600', 'hover:bg-white', 'hover:shadow-sm');
+        }
+
         toggle.addEventListener('click', () => {
             // Atualizar botoes ativos
             chartToggles.forEach(t => {
@@ -444,15 +495,141 @@ function setupChartTabs() {
             if (chartTitle) {
                 if (target === 'shear') chartTitle.innerText = 'Cortantes (kN)';
                 else if (target === 'moment') chartTitle.innerText = 'Momentos (kN.m)';
-                else if (target === 'deflection') chartTitle.innerText = 'Linha Elastica (cm)';
+                else if (target === 'deflection') chartTitle.innerText = 'Linha Elástica (cm)';
             }
             currentChartTarget = target;
             updateChartFormula();
             if (target === 'deflection') {
                 updateDeflectionChart();
+                updateDeflectionElsInfo();
+            } else {
+                hideDeflectionElsInfo();
             }
         });
     });
+}
+
+/**
+ * Exibe informações de verificação ELS-DEF abaixo do gráfico de flecha
+ */
+function updateDeflectionElsInfo() {
+    let infoDiv = document.getElementById('deflection-els-info');
+    const chartContainer = document.getElementById('container-deflection')?.parentElement;
+
+    if (!chartContainer) return;
+
+    if (!infoDiv) {
+        infoDiv = document.createElement('div');
+        infoDiv.id = 'deflection-els-info';
+        infoDiv.className = 'mt-4 p-4 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg border border-blue-200';
+        chartContainer.parentElement.appendChild(infoDiv);
+    }
+
+    if (!loadProcessor) {
+        infoDiv.innerHTML = '<p class="text-gray-500 text-sm">Clique em CALCULAR para ver a verificação de flecha.</p>';
+        infoDiv.classList.remove('hidden');
+        return;
+    }
+
+    const inputs = getDetailInputs();
+    const fck = getNumericValue('inp-fck', 30);
+    const d = computeEffectiveDepth(inputs);
+    const AsProv = computeAsProvided(inputs);
+    const frames = loadProcessor.frames || [];
+    const totalLength = loadProcessor.totalLength || 0;
+
+    if (!frames.length) {
+        infoDiv.innerHTML = '<p class="text-gray-500 text-sm">Dados de vãos não disponíveis.</p>';
+        infoDiv.classList.remove('hidden');
+        return;
+    }
+
+    // Calcular flecha por vão
+    let html = `
+        <h4 class="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
+            <svg class="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+            Verificação ELS-DEF (Flecha)
+        </h4>
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+    `;
+
+    let allOk = true;
+    frames.forEach((frame, idx) => {
+        const L = frame.end - frame.start;
+        const limitCm = (L * 100) / 250; // L/250 em cm
+
+        // Obter flecha máxima do vão (simplificado - usar dados do gráfico)
+        const dataFlecha = loadProcessor.getLoadCaseData('ELS_QP');
+        let maxDeflection = 0;
+
+        if (dataFlecha && dataFlecha.deflection) {
+            const stations = dataFlecha.stations || [];
+            const deflections = dataFlecha.deflection || [];
+            for (let i = 0; i < stations.length; i++) {
+                if (stations[i] >= frame.start && stations[i] <= frame.end) {
+                    maxDeflection = Math.max(maxDeflection, Math.abs(deflections[i] || 0));
+                }
+            }
+        }
+
+        const utilization = (maxDeflection / limitCm) * 100;
+        const isOk = maxDeflection <= limitCm;
+        if (!isOk) allOk = false;
+
+        const bgColor = isOk ? 'bg-emerald-50 border-emerald-200' : 'bg-amber-50 border-amber-200';
+        const textColor = isOk ? 'text-emerald-700' : 'text-amber-700';
+        const badge = isOk
+            ? '<span class="text-[10px] font-semibold px-2 py-0.5 rounded bg-emerald-500 text-white">OK</span>'
+            : '<span class="text-[10px] font-semibold px-2 py-0.5 rounded bg-amber-500 text-white">ALERTA</span>';
+
+        html += `
+            <div class="p-3 rounded-lg border ${bgColor}">
+                <div class="flex items-center justify-between mb-2">
+                    <span class="text-xs font-medium text-gray-600">Vão ${idx + 1}</span>
+                    ${badge}
+                </div>
+                <div class="text-xs text-gray-500">L = ${L.toFixed(2)} m</div>
+                <div class="mt-2 flex justify-between items-center">
+                    <span class="text-xs text-gray-500">δ<sub>max</sub></span>
+                    <span class="text-sm font-semibold ${textColor}">${maxDeflection.toFixed(2)} cm</span>
+                </div>
+                <div class="flex justify-between items-center">
+                    <span class="text-xs text-gray-500">δ<sub>lim</sub> (L/250)</span>
+                    <span class="text-sm text-gray-600">${limitCm.toFixed(2)} cm</span>
+                </div>
+                <div class="mt-2 h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                    <div class="h-full ${isOk ? 'bg-emerald-500' : 'bg-amber-500'}" style="width: ${Math.min(utilization, 100)}%"></div>
+                </div>
+                <div class="text-right text-[10px] text-gray-500 mt-1">${utilization.toFixed(0)}%</div>
+            </div>
+        `;
+    });
+
+    html += '</div>';
+
+    // Resumo geral
+    const summaryBg = allOk ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700';
+    const summaryIcon = allOk ? '✓' : '⚠';
+    html += `
+        <div class="mt-3 p-2 rounded ${summaryBg} text-sm font-medium text-center">
+            ${summaryIcon} ${allOk ? 'Todos os vãos atendem ao limite L/250' : 'Alguns vãos ultrapassam o limite L/250'}
+        </div>
+    `;
+
+    infoDiv.innerHTML = html;
+    infoDiv.classList.remove('hidden');
+}
+
+/**
+ * Oculta o painel de informações ELS-DEF
+ */
+function hideDeflectionElsInfo() {
+    const infoDiv = document.getElementById('deflection-els-info');
+    if (infoDiv) {
+        infoDiv.classList.add('hidden');
+    }
 }
 
 // Grafico de Flecha
@@ -725,6 +902,7 @@ function renderLoadCaseFilters() {
         btn.addEventListener('click', (e) => {
             currentLoadCase = e.target.dataset.loadcase;
             renderLoadCaseFilters();
+            updateChartToggleButtons(currentLoadCase); // Atualiza botões de gráfico (mostra/oculta Flecha)
             updateCharts(currentLoadCase);
             updateChartFormula();
             updateCriticalSections();
@@ -842,7 +1020,39 @@ function updateCriticalSections(sections = null) {
         const fatigueUtil = fatigueResult.utilizacao || 0;
         const fatigueOk = fatigueResult.status === 'OK';
 
-        const cardOk = flexOk && shearOk && fatigueOk;
+        // Passo 1: Armadura Mínima (NBR 6118 Item 17.3.5.2.1)
+        const As_min = 0.0015 * inputs.bw * inputs.h;
+        const asMinUtil = AsProv > 0 ? (As_min / AsProv) * 100 : 0;
+        const asMinOk = AsProv >= As_min;
+
+        // Passo 2: Armadura Máxima (NBR 6118 Item 17.3.5.2.4)
+        const As_max = 0.04 * inputs.bw * inputs.h;
+        const asMaxUtil = As_max > 0 ? (AsProv / As_max) * 100 : 0;
+        const asMaxOk = AsProv <= As_max;
+
+        // Passo 3: Fadiga do Concreto (NBR 6118 Item 23.5.4.1)
+        const concFatigueResult = fatigueVerifier.verifyConcreteCompressionFatigue(fatigueMmax || 0);
+        const concFatigueUtil = concFatigueResult.utilizacao || 0;
+        const concFatigueOk = concFatigueResult.status === 'OK';
+
+        // Passo 4: Ductilidade (NBR 6118 Item 14.6.4.3)
+        const xi = flexResult.xi || 0;
+        const xiUtil = (xi / 0.45) * 100;
+        const xiOk = xi <= 0.45;
+
+        // Passo 5: Fissuração ELS-W (NBR 6118 Item 13.4.2)
+        const serviceVerifier = new ServiceabilityVerifier(
+            { bw: inputs.bw, h: inputs.h, d: d },
+            { fck: fck, fyk: inputs.fykLong },
+            AsProv,
+            { phi: inputs.barPhi }
+        );
+        const M_freq = momentAbs * 0.7; // Combinação frequente ~70% ELU
+        const crackResult = serviceVerifier.verifyCrackWidth(M_freq);
+        const crackUtil = crackResult.utilizacao || 0;
+        const crackOk = crackResult.status === 'OK';
+
+        const cardOk = flexOk && shearOk && fatigueOk && asMinOk && asMaxOk && concFatigueOk && xiOk && crackOk;
         const cardClass = cardOk ? 'border-emerald-200 bg-emerald-50' : 'border-amber-200 bg-amber-50';
         const badgeClass = cardOk ? 'bg-emerald-500' : 'bg-amber-500';
         const badgeLabel = cardOk ? 'OK' : 'ALERTA';
@@ -860,6 +1070,11 @@ function updateCriticalSections(sections = null) {
                     ${buildUtilRow('Flexao ELU', flexUtil, flexOk)}
                     ${buildUtilRow('Cisalhamento', shearUtilMax, shearOk)}
                     ${buildUtilRow('Fadiga Aco', fatigueUtil, fatigueOk)}
+                    ${buildUtilRow('Arm. Mínima', asMinUtil, asMinOk)}
+                    ${buildUtilRow('Arm. Máxima', asMaxUtil, asMaxOk)}
+                    ${buildUtilRow('Fadiga Conc.', concFatigueUtil, concFatigueOk)}
+                    ${buildUtilRow('Ductilidade', xiUtil, xiOk)}
+                    ${buildUtilRow('Fissuração', crackUtil, crackOk)}
                 </div>
                 <div class="mt-3 text-xs text-gray-500">
                     M = ${formatNumber(section.M_max)} / ${formatNumber(section.M_min)} kN.m<br>
