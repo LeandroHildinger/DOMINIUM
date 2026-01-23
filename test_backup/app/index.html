@@ -1,0 +1,374 @@
+﻿<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DOMINIUM - Verificador de Vigas de Rolamento</title>
+
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+
+    <!-- Custom Config -->
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#0d47a1',
+                        secondary: '#1565c0',
+                        success: '#2e7d32',
+                        warning: '#f57f17',
+                        danger: '#c62828',
+                    }
+                }
+            }
+        }
+    </script>
+
+    <link rel="stylesheet" href="css/style.css">
+</head>
+
+<body class="bg-gray-100 app-shell m-0">
+
+    <!-- Header -->
+    <header id="app-header" class="bg-primary text-white shadow-lg">
+        <div class="px-6 py-4">
+            <div class="flex items-center justify-between">
+                <div>
+                    <h1 class="text-2xl font-bold">DOMINIUM</h1>
+                    <p class="text-blue-200 text-sm">Verificador de Vigas de Rolamento</p>
+                </div>
+                <div class="text-right text-sm">
+                    <span class="bg-blue-800 px-3 py-1 rounded">v2.0 SPA</span>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <main class="app-main px-6 py-2">
+        <div class="app-layout">
+
+            <!-- Sidebar: Inputs -->
+            <aside class="app-sidebar">
+                <div class="bg-white rounded-lg shadow p-6 sidebar-card">
+                    <h2 class="text-lg font-semibold text-gray-800 mb-4 border-b pb-2">
+                        Parâmetros de Entrada
+                    </h2>
+
+                    <!-- Arquivo Excel -->
+                    <div class="mb-6">
+                        <h3 class="text-sm font-medium text-gray-600 mb-3">Arquivo Excel</h3>
+                        <input type="file" id="input-excel" accept=".xlsx"
+                            class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent">
+                        <button id="btn-load-excel"
+                            class="w-full mt-3 bg-gray-800 hover:bg-gray-700 text-white font-semibold py-2 px-4 rounded-lg transition-colors shadow-md">
+                            LER EXCEL
+                        </button>
+                        <p id="excel-status" class="text-xs text-gray-500 mt-2">Sem arquivo carregado.</p>
+                    </div>
+
+                    <!-- Geometria -->
+                    <div class="mb-6">
+                        <h3 class="text-sm font-medium text-gray-600 mb-3">Geometria (cm)</h3>
+                        <div class="grid grid-cols-2 gap-3">
+                            <div>
+                                <label class="block text-xs text-gray-500 mb-1">Largura (bw)</label>
+                                <input type="number" id="inp-bw" value="30"
+                                    class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent">
+                            </div>
+                            <div>
+                                <label class="block text-xs text-gray-500 mb-1">Altura (h)</label>
+                                <input type="number" id="inp-h" value="60"
+                                    class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Cobrimento -->
+                    <div class="mb-6">
+                        <h3 class="text-sm font-medium text-gray-600 mb-3">Cobrimento (cm)</h3>
+                        <input type="number" id="inp-cover" value="3" step="0.1"
+                            class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent">
+                    </div>
+
+                    <!-- Materiais -->
+                    <div class="mb-6">
+                        <h3 class="text-sm font-medium text-gray-600 mb-3">Materiais (MPa)</h3>
+                        <div class="grid grid-cols-2 gap-3">
+                            <div>
+                                <label class="block text-xs text-gray-500 mb-1">fck</label>
+                                <select id="inp-fck"
+                                    class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-primary">
+                                    <option value="25">C25</option>
+                                    <option value="30" selected>C30</option>
+                                    <option value="35">C35</option>
+                                    <option value="40">C40</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-xs text-gray-500 mb-1">Aço Longitudinal (fyk)</label>
+                                <select id="inp-fyk-long"
+                                    class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-primary">
+                                    <option value="500" selected>CA-50</option>
+                                    <option value="600">CA-60</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-xs text-gray-500 mb-1">Aço Estribo (fywk)</label>
+                                <select id="inp-fyk-stirr"
+                                    class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-primary">
+                                    <option value="500">CA-50</option>
+                                    <option value="600" selected>CA-60</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Armadura -->
+                    <div class="mb-6">
+                        <h3 class="text-sm font-medium text-gray-600 mb-3">Armadura Longitudinal</h3>
+                        <div class="grid grid-cols-2 gap-3">
+                            <div>
+                                <label class="block text-xs text-gray-500 mb-1">Nº Barras</label>
+                                <input type="number" id="inp-nbars" value="5"
+                                    class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-primary">
+                            </div>
+                            <div>
+                                <label class="block text-xs text-gray-500 mb-1">Diâmetro (mm)</label>
+                                <select id="inp-phi"
+                                    class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-primary">
+                                    <option value="12.5">12.5</option>
+                                    <option value="16">16</option>
+                                    <option value="20" selected>20</option>
+                                    <option value="25">25</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Armadura Transversal (Estribos) -->
+                    <div class="mb-6">
+                        <h3 class="text-sm font-medium text-gray-600 mb-3">Armadura Transversal</h3>
+                        <div class="grid grid-cols-2 gap-3">
+                            <div>
+                                <label class="block text-xs text-gray-500 mb-1">Diâmetro (mm)</label>
+                                <select id="inp-stirr-phi"
+                                    class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-primary">
+                                    <option value="5">5.0</option>
+                                    <option value="6.3">6.3</option>
+                                    <option value="8" selected>8.0</option>
+                                    <option value="10">10.0</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-xs text-gray-500 mb-1">Espaçamento (cm)</label>
+                                <input type="number" id="inp-stirr-s" value="15" step="1"
+                                    class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-primary">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Botão Calcular -->
+                    <button id="btn-calculate"
+                        class="w-full bg-primary hover:bg-secondary text-white font-semibold py-3 px-4 rounded-lg transition-colors shadow-md">
+                        CALCULAR
+                    </button>
+
+                    <!-- Info Viga -->
+                    <div id="info-beam" class="mt-4 p-3 bg-blue-50 rounded-lg text-sm text-blue-800 hidden">
+                        <!-- Preenchido via JS -->
+                    </div>
+                </div>
+            </aside>
+
+            <div id="resizer-sidebar" class="app-resizer app-resizer-vertical" title="Arraste para ajustar"></div>
+
+            <!-- Main Content -->
+            <section class="app-content gap-3">
+                <div class="bg-white rounded-lg shadow p-3">
+                    <div class="app-tabs" role="tablist">
+                        <button class="tab-btn active" data-tab="overview" role="tab" aria-selected="true">Visão
+                            Geral</button>
+                        <button class="tab-btn" data-tab="details" role="tab" aria-selected="false">Detalhamento e
+                            Armadura</button>
+                        <button class="tab-btn" data-tab="memoria" role="tab" aria-selected="false">Memória de
+                            Cálculo</button>
+                    </div>
+                </div>
+
+                <div class="tab-panels">
+                    <div class="tab-panel active" id="tab-overview" role="tabpanel">
+                        <div class="bg-white rounded-lg shadow p-4 mb-3">
+                            <div class="flex flex-wrap items-center gap-3">
+                                <span class="text-sm font-medium text-gray-700">Caso de Carga:</span>
+                                <div id="load-case-filters" class="flex flex-wrap gap-2">
+                                    <!-- Gerado via JS -->
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="flex flex-col gap-4">
+                            <!-- Container Unificado de Graficos -->
+                            <div class="bg-white rounded-lg shadow p-4">
+                                <div class="flex items-center justify-between mb-4 border-b pb-2">
+                                    <h3 class="text-md font-semibold text-gray-700" id="current-chart-title">Diagramas
+                                    </h3>
+                                    <div class="flex gap-2 bg-gray-100 p-1 rounded-lg">
+                                        <button
+                                            class="px-3 py-1 text-xs font-medium rounded-md bg-white shadow-sm text-gray-800 transition-all chart-toggle active"
+                                            data-target="shear">Cortantes</button>
+                                        <button
+                                            class="px-3 py-1 text-xs font-medium rounded-md text-gray-600 hover:bg-white hover:shadow-sm transition-all chart-toggle"
+                                            data-target="moment">Momentos</button>
+                                        <button
+                                            class="px-3 py-1 text-xs font-medium rounded-md text-gray-600 hover:bg-white hover:shadow-sm transition-all chart-toggle"
+                                            data-target="deflection">Flecha</button>
+                                    </div>
+                                </div>
+
+                                <div style="height: 350px;" class="relative">
+                                    <div id="container-shear" class="chart-container absolute inset-0 z-10 bg-white">
+                                        <canvas id="chart-shear"></canvas>
+                                    </div>
+                                    <div id="container-moment"
+                                        class="chart-container absolute inset-0 z-0 bg-white opacity-0 pointer-events-none">
+                                        <canvas id="chart-moments"></canvas>
+                                    </div>
+                                    <div id="container-deflection"
+                                        class="chart-container absolute inset-0 z-0 bg-white opacity-0 pointer-events-none">
+                                        <canvas id="chart-deflection"></canvas>
+                                    </div>
+                                </div>
+                                <p id="chart-subtitle" class="text-xs text-gray-500 mt-2 text-right"></p>
+                            </div>
+
+                            <!-- Verificacoes -->
+                            <div class="bg-white rounded-lg shadow p-6">
+                                <h3 class="text-lg font-semibold text-gray-800 mb-4 border-b pb-2">
+                                    Verificação por Seção Crítica
+                                </h3>
+                                <div id="critical-sections"
+                                    class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+                                    <div class="text-gray-400 text-center py-8 col-span-full">
+                                        Clique em "CALCULAR" para gerar a análise
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="tab-panel" id="tab-details" role="tabpanel">
+                        <div class="bg-white rounded-lg shadow p-4">
+                            <div class="flex flex-wrap items-center justify-between gap-2">
+                                <div>
+                                    <h3 class="text-lg font-semibold text-gray-800">Detalhamento e Armadura</h3>
+                                    <p class="text-xs text-gray-500">Selecione a seção crítica para visualizar o
+                                        detalhamento.</p>
+                                </div>
+                                <div id="detail-section-info" class="text-xs text-gray-500 text-right"></div>
+                            </div>
+                            <div id="detail-summary" class="grid grid-cols-2 md:grid-cols-4 gap-2 mt-3"></div>
+                            <div id="detail-section-list" class="grid grid-cols-1 md:grid-cols-3 gap-3 mt-3">
+                                <div class="text-gray-400 text-center py-6 col-span-full">
+                                    Clique em "CALCULAR" para gerar as seções críticas
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-1 xl:grid-cols-2 gap-4 flex-1 min-h-0">
+                            <div class="bg-white rounded-lg shadow p-4 flex flex-col gap-4 overflow-auto min-h-0">
+                                <div>
+                                    <h4 class="text-sm font-semibold text-gray-700 mb-2">Parâmetros de Armadura</h4>
+                                    <div class="grid grid-cols-2 gap-3">
+                                        <div>
+                                            <label class="block text-xs text-gray-500 mb-1">Camadas</label>
+                                            <input type="number" id="inp-layers" value="3" min="1" max="4"
+                                                class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent">
+                                        </div>
+                                        <div>
+                                            <label class="block text-xs text-gray-500 mb-1">Espaçamento mínimo
+                                                (cm)</label>
+                                            <input type="number" id="inp-clear-spacing" value="2.5" step="0.1"
+                                                class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent">
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <h4 class="text-sm font-semibold text-gray-700 mb-2">Estribos</h4>
+                                    <div class="grid grid-cols-2 gap-3">
+                                        <div>
+                                            <label class="block text-xs text-gray-500 mb-1">Diâmetro (mm)</label>
+                                            <input type="number" id="inp-stirr-phi" value="8" step="0.1"
+                                                class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent">
+                                        </div>
+                                        <div>
+                                            <label class="block text-xs text-gray-500 mb-1">Espaçamento (cm)</label>
+                                            <input type="number" id="inp-stirr-s" value="15" step="0.5"
+                                                class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent">
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="text-xs text-gray-500">
+                                    Usa bw/h, N de barras e diâmetro longitudinal definidos nos parâmetros de entrada.
+                                </div>
+
+                                <div class="mt-2 p-3 rounded-lg border bg-slate-50">
+                                    <h5 class="text-xs font-semibold text-gray-600 uppercase tracking-wide">Domínio</h5>
+                                    <div id="detail-domain" class="text-sm text-gray-700 mt-2">
+                                        <div class="domain-figure">
+                                            <div class="domain-image-wrap">
+                                                <img id="domain-image" src="assets/dominio-nbr.png"
+                                                    alt="Domínios NBR 6118">
+                                                <svg id="domain-overlay" viewBox="0 0 100 100"
+                                                    preserveAspectRatio="none" aria-hidden="true">
+                                                    <line id="domain-line" x1="10" y1="90" x2="70" y2="10"></line>
+                                                </svg>
+                                            </div>
+                                            <div id="domain-text" class="text-xs text-gray-500">Sem dados para calcular
+                                                o domínio.</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="bg-white rounded-lg shadow p-4 flex flex-col min-h-0">
+                                <div class="flex items-center justify-between mb-2">
+                                    <h4 class="text-sm font-semibold text-gray-700">Seção e Armadura</h4>
+                                    <span id="detail-section-label" class="text-xs text-gray-500"></span>
+                                </div>
+                                <div
+                                    class="flex-1 min-h-0 border rounded-lg bg-slate-50 flex items-center justify-center">
+                                    <svg id="section-svg" viewBox="0 0 420 300" class="w-full h-full"></svg>
+                                </div>
+                                <div class="mt-3">
+                                    <h5 class="text-xs font-semibold text-gray-600 uppercase tracking-wide">Avisos</h5>
+                                    <ul id="detail-warnings" class="text-xs text-orange-600 mt-2 space-y-1"></ul>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="tab-panel" id="tab-memoria" role="tabpanel">
+                        <div class="bg-white rounded-lg shadow p-6 h-full flex flex-col">
+                            <h3 class="text-lg font-semibold text-gray-800 mb-3">Memória de Cálculo</h3>
+                            <p class="text-sm text-gray-500">Em desenvolvimento. Aqui vamos exibir a memória passo a
+                                passo.</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </main>
+
+    <!-- Scripts -->
+    <script type="module" src="js/ui/main.js"></script>
+</body>
+
+</html>
