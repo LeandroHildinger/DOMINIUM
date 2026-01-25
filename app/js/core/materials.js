@@ -86,7 +86,7 @@ export class Concrete {
 
     /** Limite de resistência à compressão na fadiga (MPa) */
     get fcd_fad() {
-        return 0.45 * this.fck;
+        return 0.45 * this.fcd;
     }
 
     /** Limite de resistência à tração na fadiga (MPa) - Item 23.5.4.2 */

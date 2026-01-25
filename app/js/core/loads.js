@@ -109,6 +109,9 @@ export class LoadProcessor {
             { name: '1', length: 6, startX: 0, endX: 6 },
             { name: '2', length: 6, startX: 6, endX: 12 }
         ];
+        this.cnf = 1.0;
+        this.civ = 1.0;
+        this.cia = 1.0;
         this.caseData = {
             DEAD: DEFAULT_DEAD_DATA,
             TRILHO: DEFAULT_TRILHO_DATA,
@@ -131,6 +134,18 @@ export class LoadProcessor {
         }
         if (typeof data.totalLength === "number" && !Number.isNaN(data.totalLength)) {
             this.totalLength = data.totalLength;
+        }
+    }
+
+    setLoadFactors(factors = {}) {
+        if (typeof factors.cnf === "number" && Number.isFinite(factors.cnf) && factors.cnf > 0) {
+            this.cnf = factors.cnf;
+        }
+        if (typeof factors.civ === "number" && Number.isFinite(factors.civ) && factors.civ > 0) {
+            this.civ = factors.civ;
+        }
+        if (typeof factors.cia === "number" && Number.isFinite(factors.cia) && factors.cia > 0) {
+            this.cia = factors.cia;
         }
     }
 
@@ -157,12 +172,16 @@ export class LoadProcessor {
 
         // Envoltoria (ENV_MOVEL)
         if (loadCase === "ENV_MOVEL") {
+            const cnf = Number.isFinite(this.cnf) ? this.cnf : 1.0;
+            const civ = Number.isFinite(this.civ) ? this.civ : 1.0;
+            const cia = Number.isFinite(this.cia) ? this.cia : 1.0;
+            const impact = cnf * civ * cia;
             return {
                 stations: this.caseData.ENV_MOVEL.map(d => d.x),
-                M_max: this.caseData.ENV_MOVEL.map(d => d.M_max),
-                M_min: this.caseData.ENV_MOVEL.map(d => d.M_min),
-                V_max: this.caseData.ENV_MOVEL.map(d => d.V_max),
-                V_min: this.caseData.ENV_MOVEL.map(d => d.V_min)
+                M_max: this.caseData.ENV_MOVEL.map(d => d.M_max * impact),
+                M_min: this.caseData.ENV_MOVEL.map(d => d.M_min * impact),
+                V_max: this.caseData.ENV_MOVEL.map(d => d.V_max * impact),
+                V_min: this.caseData.ENV_MOVEL.map(d => d.V_min * impact)
             };
         }
 

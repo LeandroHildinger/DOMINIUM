@@ -9,6 +9,7 @@ import { BendingVerifier } from '../core/bending.js';
 import { ShearVerifier } from '../core/shear.js';
 import { FatigueVerifier } from '../core/fatigue.js';
 import { ServiceabilityVerifier } from '../core/serviceability.js';
+import { DomainVisualizer } from '../components/DomainVisualizer.js';
 
 // Instancias globais
 let loadProcessor = null;
@@ -19,6 +20,7 @@ let currentLoadCase = 'ENV_MOVEL';
 let currentChartTarget = 'shear';
 let detailSections = [];
 let selectedDetailSectionId = null;
+let domainVisualizer = null;
 
 // Funções auxiliares para Detalhamento
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
@@ -68,6 +70,29 @@ function computeStirrupAsw(inputs) {
     const legs = 2;
     const spacing = inputs.stirrSpacing > 0 ? inputs.stirrSpacing : 1;
     return (legs * area / spacing) * 100;
+}
+
+function computeCiv(span) {
+    if (!Number.isFinite(span) || span <= 0) return 1.0;
+    if (span < 10) return 1.35;
+    if (span <= 200) return 1 + 1.06 * (20 / (span + 50));
+    return 1.0;
+}
+
+function syncImpactInputs() {
+    const spanEl = document.getElementById('inp-span');
+    const civEl = document.getElementById('inp-civ');
+    if (!spanEl || !civEl) return;
+    const span = parseFloat(spanEl.value);
+    const civ = computeCiv(span);
+    civEl.value = Number.isFinite(civ) ? civ.toFixed(3) : '1.000';
+}
+
+function setupImpactInputs() {
+    const spanEl = document.getElementById('inp-span');
+    if (!spanEl) return;
+    spanEl.addEventListener('input', syncImpactInputs);
+    spanEl.addEventListener('change', syncImpactInputs);
 }
 
 function buildUtilRow(label, util, ok) {
@@ -278,6 +303,11 @@ function setupExcelUpload() {
                 loadProcessor = new LoadProcessor();
             }
             loadProcessor.setCaseData(loadData);
+            const spanEl = document.getElementById('inp-span');
+            if (spanEl && Number.isFinite(loadData.totalLength)) {
+                spanEl.value = loadData.totalLength.toFixed(2);
+                syncImpactInputs();
+            }
             runCalculation();
             setStatus(`Excel carregado: ${input.files[0].name}`);
         } catch (err) {
@@ -664,18 +694,17 @@ function updateDeflectionChart() {
         if (!dataToUse || !dataToUse.stations) return;
 
         // Calcular flecha
-        const bw = parseFloat(document.getElementById('inp-bw')?.value) || 30;
-        const h = parseFloat(document.getElementById('inp-h')?.value) || 60;
-        const cover = parseFloat(document.getElementById('inp-cover')?.value) || 3;
-        const fck = parseFloat(document.getElementById('inp-fck')?.value) || 30;
-        const fyk = parseFloat(document.getElementById('inp-fyk-long')?.value) || 500;
-        const nBars = parseInt(document.getElementById('inp-nbars')?.value) || 5;
-        const phi = parseFloat(document.getElementById('inp-phi')?.value) || 20;
+        const inputs = getDetailInputs();
+        const bw = inputs.bw;
+        const h = inputs.h;
+        const fck = getNumericValue('inp-fck', 30);
+        const fyk = inputs.fykLong;
+        const d = computeEffectiveDepth(inputs);
+        const As = computeAsProvided(inputs);
+        const phi = inputs.barPhi;
+        const dLinha = inputs.cover + (inputs.stirrPhi / 10) + (phi / 10) / 2;
 
-        const d = h - cover - 0.8 - (phi / 20);
-        const As = nBars * Math.PI * (phi / 20) ** 2;
-
-        const elsVerifier = new ServiceabilityVerifier({ bw, h, d }, { fck, fyk }, As, { phi });
+        const elsVerifier = new ServiceabilityVerifier({ bw, h, d }, { fck, fyk }, As, { phi, d_linha: dLinha });
 
         // Momentos para flecha (ELS-QP)
         const momentsQp = buildMomentSeries(dataToUse);
@@ -815,13 +844,13 @@ function safeUtilization(value) {
 function getCombinationFormula(loadCase) {
     switch (loadCase) {
         case 'ELU':
-            return 'ELU = 1.4*(G + Trilho) + 1.4*Q';
+            return 'ELU = 1.4*(G + Trilho) + 1.4*(Q*CIV*CIA*CNF)';
         case 'FADIGA':
-            return 'Fadiga = 1.0*(G + Trilho) + 1.0*Q';
+            return 'Fadiga = 1.0*(G + Trilho) + 1.0*(Q*CIV*CIA*CNF)';
         case 'ELS_QP':
-            return 'ELS-QP = 1.0*(G + Trilho) + 0.5*Q';
+            return 'ELS-QP = 1.0*(G + Trilho) + 0.5*(Q*CIV*CIA*CNF)';
         case 'ELS_FREQ':
-            return 'ELS-FREQ = 1.0*(G + Trilho) + 0.8*Q';
+            return 'ELS-FREQ = 1.0*(G + Trilho) + 0.8*(Q*CIV*CIA*CNF)';
         default:
             return '';
     }
@@ -1041,13 +1070,20 @@ function updateCriticalSections(sections = null) {
         const xiOk = xi <= 0.45;
 
         // Passo 5: Fissuração ELS-W (NBR 6118 Item 13.4.2)
+        const barDia = inputs.barPhi / 10;
+        const stirrDia = inputs.stirrPhi / 10;
+        const dLinha = inputs.cover + stirrDia + barDia / 2;
         const serviceVerifier = new ServiceabilityVerifier(
             { bw: inputs.bw, h: inputs.h, d: d },
             { fck: fck, fyk: inputs.fykLong },
             AsProv,
-            { phi: inputs.barPhi }
+            { phi: inputs.barPhi, d_linha: dLinha }
         );
-        const M_freq = momentAbs * 0.7; // Combinação frequente ~70% ELU
+        const elsFreqData = loadProcessor.getLoadCaseData('ELS_FREQ');
+        const elsFreqAtX = getCaseAtX(elsFreqData, section.x);
+        const M_freq = elsFreqAtX
+            ? Math.max(Math.abs(elsFreqAtX.M_max || 0), Math.abs(elsFreqAtX.M_min || 0))
+            : momentAbs;
         const crackResult = serviceVerifier.verifyCrackWidth(M_freq);
         const crackUtil = crackResult.utilizacao || 0;
         const crackOk = crackResult.status === 'OK';
@@ -1104,6 +1140,11 @@ function runCalculation() {
     if (!loadProcessor) {
         loadProcessor = new LoadProcessor();
     }
+    syncImpactInputs();
+    const inputs = getDetailInputs();
+    if (loadProcessor.setLoadFactors) {
+        loadProcessor.setLoadFactors({ cnf: inputs.cnf, civ: inputs.civ, cia: inputs.cia });
+    }
     loadProcessor.processGlobalGeometry();
 
     renderLoadCaseFilters();
@@ -1119,7 +1160,7 @@ function runCalculation() {
 
     if (infoBeam) {
         infoBeam.innerHTML = `
-            <strong>Viga Cont??nua:</strong> ${summary.totalLength} m<br>
+            <strong>Viga Cont&iacute;nua:</strong> ${summary.totalLength} m<br>
             <strong>Frames:</strong> ${summary.numFrames}<br>
             <strong>A<sub>s</sub> provida:</strong> ${As.toFixed(2)} cm<sup>2</sup>
         `;
@@ -1213,6 +1254,10 @@ function getDetailInputs() {
     const fykStirr = getNumericValue('inp-fyk-stirr', 500);
     const fykLongLabel = getSelectLabel('inp-fyk-long', 'CA-50');
     const fykStirrLabel = getSelectLabel('inp-fyk-stirr', 'CA-50');
+    const span = getNumericValue('inp-span', 12);
+    const cia = getNumericValue('inp-cia', 1.25);
+    const cnf = getNumericValue('inp-cnf', 1.0);
+    const civ = computeCiv(span);
 
     return {
         bw,
@@ -1227,7 +1272,11 @@ function getDetailInputs() {
         fykLong,
         fykStirr,
         fykLongLabel,
-        fykStirrLabel
+        fykStirrLabel,
+        span,
+        cia,
+        cnf,
+        civ
     };
 }
 
@@ -1285,75 +1334,24 @@ function computeDomainData(inputs, momentValue) {
 }
 
 
-function computeDomainStrains(xi, xi23 = 0.259) {
-    const eps_cu = 3.5;
-    const eps_s_max = 10.0;
-
-    if (!Number.isFinite(xi) || xi <= 0) {
-        return null;
-    }
-
-    let eps_c = eps_cu;
-    let eps_s = (eps_cu * (1 - xi)) / xi;
-    if (xi <= xi23) {
-        eps_s = eps_s_max;
-        eps_c = (eps_s * xi) / (1 - xi);
-    }
-
-    const eps_c_clamped = Math.min(Math.max(eps_c, 0), eps_cu);
-    const eps_s_clamped = Math.min(Math.max(eps_s, 0), eps_s_max);
-
-    return {
-        eps_c,
-        eps_s,
-        eps_c_clamped,
-        eps_s_clamped,
-        eps_cu,
-        eps_s_max
-    };
-}
+// function computeDomainStrains was removed - moved to DomainVisualizer
 
 function updateDomainOverlay(domainData) {
-    const line = document.getElementById('domain-line');
-    if (!line) return;
+    if (!domainVisualizer) {
+        // Inicializa na primeira chamada se necessário, ou garanta que o DOM já existe
+        domainVisualizer = new DomainVisualizer('domain-line');
+    }
 
     if (!domainData || !Number.isFinite(domainData.xi)) {
-        line.setAttribute('opacity', '0');
+        domainVisualizer.hide();
         return;
     }
-
-    // Calibrated for app/assets/dominio-nbr.png
-    const map = {
-        x_left: 5.45,
-        x_zero: 67.3,
-        x_ecu: 87.9,
-        y_top: 17.9,
-        y_bottom: 92.3
-    };
 
     const xi = domainData.xi;
-    const xi23 = Number.isFinite(domainData.xi_23) ? domainData.xi_23 : 0.259;
-    const strains = computeDomainStrains(xi, xi23);
-    if (!strains) {
-        line.setAttribute('opacity', '0');
-        return;
-    }
+    // Opcional: passar xi23 se variar
+    // const xi23 = Number.isFinite(domainData.xi_23) ? domainData.xi_23 : 0.259;
 
-    const {
-        eps_cu,
-        eps_s_max,
-        eps_c_clamped,
-        eps_s_clamped
-    } = strains;
-
-    const topX = map.x_zero + (eps_c_clamped / eps_cu) * (map.x_ecu - map.x_zero);
-    const bottomX = map.x_zero - (eps_s_clamped / eps_s_max) * (map.x_zero - map.x_left);
-
-    line.setAttribute('x1', bottomX);
-    line.setAttribute('y1', map.y_bottom);
-    line.setAttribute('x2', topX);
-    line.setAttribute('y2', map.y_top);
-    line.setAttribute('opacity', '1');
+    domainVisualizer.updateFromXi(xi);
 }
 
 function renderDomainPanel(section, momentInfo, domainData) {
@@ -1375,7 +1373,8 @@ function renderDomainPanel(section, momentInfo, domainData) {
 
     let strainsHtml = '';
     if (xi !== null) {
-        const strains = computeDomainStrains(xi, xi23);
+        // Usa o método estático para calcular valores para exibição no texto
+        const strains = DomainVisualizer.computeStrains(xi, xi23);
         if (strains) {
             const es = (strains.eps_s_clamped * 10).toFixed(2); // per mil
             const ec = (strains.eps_c_clamped * 10).toFixed(2); // per mil
@@ -1914,6 +1913,8 @@ function setupResizers() {
 
 document.addEventListener('DOMContentLoaded', () => {
     updateLayoutMetrics();
+    syncImpactInputs();
+    setupImpactInputs();
     initCharts();
     initDeflectionChart();
     setupExcelUpload();

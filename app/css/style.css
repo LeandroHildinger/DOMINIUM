@@ -235,7 +235,7 @@ body {
     gap: 16px;
     min-height: 0;
     height: 100%;
-    overflow: hidden;
+    overflow: auto;
 }
 
 .tab-panel.active {
@@ -348,9 +348,28 @@ body {
 }
 
 @media (max-width: 1024px) {
+    .app-shell {
+        height: auto;
+        overflow: auto;
+    }
+
+    .app-main {
+        height: auto;
+    }
+
     .app-layout {
+        height: auto;
         grid-template-columns: 1fr;
         grid-template-rows: auto 1fr;
+    }
+
+    .tab-panels {
+        overflow: visible;
+    }
+
+    .tab-panel {
+        height: auto;
+        overflow: visible;
     }
 
     .app-resizer-vertical {
