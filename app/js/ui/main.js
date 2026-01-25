@@ -446,19 +446,12 @@ function updateChartToggleButtons(loadCase) {
     const container = document.querySelector('.chart-toggle')?.parentElement;
     if (!container) return;
 
-    const showDeflection = loadCase === 'ELS_QP';
-
     // Gerar botões dinamicamente
     let buttonsHtml = `
         <button class="px-3 py-1 text-xs font-medium rounded-md bg-white shadow-sm text-gray-800 transition-all chart-toggle active" data-target="shear">Cortantes</button>
         <button class="px-3 py-1 text-xs font-medium rounded-md text-gray-600 hover:bg-white hover:shadow-sm transition-all chart-toggle" data-target="moment">Momentos</button>
+        <button class="px-3 py-1 text-xs font-medium rounded-md text-gray-600 hover:bg-white hover:shadow-sm transition-all chart-toggle" data-target="deflection">Flecha</button>
     `;
-
-    if (showDeflection) {
-        buttonsHtml += `
-            <button class="px-3 py-1 text-xs font-medium rounded-md text-gray-600 hover:bg-white hover:shadow-sm transition-all chart-toggle" data-target="deflection">Flecha</button>
-        `;
-    }
 
     container.innerHTML = buttonsHtml;
 
@@ -471,23 +464,6 @@ function updateChartToggleButtons(loadCase) {
     };
     const chartTitle = document.getElementById('current-chart-title');
     const deflectionInfo = document.getElementById('deflection-els-info');
-
-    // Se não está em Flecha QP mas estava mostrando deflection, voltar para shear
-    if (!showDeflection && currentChartTarget === 'deflection') {
-        currentChartTarget = 'shear';
-        // Mostrar container de shear
-        Object.values(chartContainers).forEach(c => {
-            if (c) {
-                c.classList.add('opacity-0', 'pointer-events-none', 'z-0');
-                c.classList.remove('z-10');
-            }
-        });
-        if (chartContainers['shear']) {
-            chartContainers['shear'].classList.remove('opacity-0', 'pointer-events-none', 'z-0');
-            chartContainers['shear'].classList.add('z-10');
-        }
-        if (chartTitle) chartTitle.innerText = 'Cortantes (kN)';
-    }
 
     chartToggles.forEach(toggle => {
         // Marcar botão ativo correto
@@ -556,105 +532,124 @@ function updateDeflectionElsInfo() {
     }
 
     if (!loadProcessor) {
-        infoDiv.innerHTML = '<p class="text-gray-500 text-sm">Clique em CALCULAR para ver a verificação de flecha.</p>';
+        infoDiv.innerHTML = '<p class="text-gray-500 text-sm">Clique em CALCULAR para ver a verificacao de flecha.</p>';
         infoDiv.classList.remove('hidden');
         return;
     }
 
-    const inputs = getDetailInputs();
-    const fck = getNumericValue('inp-fck', 30);
-    const d = computeEffectiveDepth(inputs);
-    const AsProv = computeAsProvided(inputs);
+    const deflectionResult = getDeflectionResultForCase(currentLoadCase);
     const frames = loadProcessor.frames || [];
     const totalLength = loadProcessor.totalLength || 0;
+    const isElsQp = currentLoadCase === 'ELS_QP';
 
     if (!frames.length) {
-        infoDiv.innerHTML = '<p class="text-gray-500 text-sm">Dados de vãos não disponíveis.</p>';
+        infoDiv.innerHTML = '<p class="text-gray-500 text-sm">Dados de vaos nao disponiveis.</p>';
         infoDiv.classList.remove('hidden');
         return;
     }
 
-    // Calcular flecha por vão
+    if (!deflectionResult || !Array.isArray(deflectionResult.deflections) || !deflectionResult.deflections.length) {
+        infoDiv.innerHTML = '<p class="text-gray-500 text-sm">Sem dados de flecha para este caso.</p>';
+        infoDiv.classList.remove('hidden');
+        return;
+    }
+
+    const spans = Array.isArray(frames) && frames.length
+        ? frames.map((frame) => {
+            const startX = Number.isFinite(frame.startX) ? frame.startX : 0;
+            const endX = Number.isFinite(frame.endX)
+                ? frame.endX
+                : (Number.isFinite(frame.length) ? startX + frame.length : totalLength || 0);
+            return { startX, endX };
+        })
+        : [{ startX: 0, endX: totalLength || 0 }];
+
+    // Calcular flecha por vao
     let html = `
         <h4 class="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
             <svg class="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
             </svg>
-            Verificação ELS-DEF (Flecha)
+            Verificacao ELS-DEF (Flecha)
         </h4>
+        ${isElsQp ? '' : '<div class="text-xs text-gray-500 mb-3">Verificacao L/250 aplicada somente para ELS-QP.</div>'}
         <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
     `;
 
     let allOk = true;
-    frames.forEach((frame, idx) => {
-        const L = frame.end - frame.start;
+    spans.forEach((span, idx) => {
+        const L = span.endX - span.startX;
+        if (L <= 0) {
+            return;
+        }
         const limitCm = (L * 100) / 250; // L/250 em cm
-
-        // Obter flecha máxima do vão (simplificado - usar dados do gráfico)
-        const dataFlecha = loadProcessor.getLoadCaseData('ELS_QP');
+        const spanDeflections = deflectionResult.deflections.filter((pt) =>
+            pt.x >= span.startX - 1e-6 && pt.x <= span.endX + 1e-6
+        );
         let maxDeflection = 0;
-
-        if (dataFlecha && dataFlecha.deflection) {
-            const stations = dataFlecha.stations || [];
-            const deflections = dataFlecha.deflection || [];
-            for (let i = 0; i < stations.length; i++) {
-                if (stations[i] >= frame.start && stations[i] <= frame.end) {
-                    maxDeflection = Math.max(maxDeflection, Math.abs(deflections[i] || 0));
-                }
+        for (const pt of spanDeflections) {
+            const value = Number.isFinite(pt.f) ? Math.abs(pt.f) : 0;
+            if (value > maxDeflection) {
+                maxDeflection = value;
             }
         }
 
-        const utilization = (maxDeflection / limitCm) * 100;
-        const isOk = maxDeflection <= limitCm;
-        if (!isOk) allOk = false;
+        const utilization = isElsQp && limitCm > 0 ? (maxDeflection / limitCm) * 100 : 0;
+        const isOk = isElsQp ? maxDeflection <= limitCm : true;
+        if (isElsQp && !isOk) allOk = false;
 
-        const bgColor = isOk ? 'bg-emerald-50 border-emerald-200' : 'bg-amber-50 border-amber-200';
-        const textColor = isOk ? 'text-emerald-700' : 'text-amber-700';
-        const badge = isOk
-            ? '<span class="text-[10px] font-semibold px-2 py-0.5 rounded bg-emerald-500 text-white">OK</span>'
-            : '<span class="text-[10px] font-semibold px-2 py-0.5 rounded bg-amber-500 text-white">ALERTA</span>';
+        const bgColor = isElsQp
+            ? (isOk ? 'bg-emerald-50 border-emerald-200' : 'bg-amber-50 border-amber-200')
+            : 'bg-slate-50 border-slate-200';
+        const textColor = isElsQp
+            ? (isOk ? 'text-emerald-700' : 'text-amber-700')
+            : 'text-slate-700';
+        const badge = isElsQp
+            ? (isOk
+                ? '<span class="text-[10px] font-semibold px-2 py-0.5 rounded bg-emerald-500 text-white">OK</span>'
+                : '<span class="text-[10px] font-semibold px-2 py-0.5 rounded bg-amber-500 text-white">ALERTA</span>')
+            : '';
 
         html += `
             <div class="p-3 rounded-lg border ${bgColor}">
                 <div class="flex items-center justify-between mb-2">
-                    <span class="text-xs font-medium text-gray-600">Vão ${idx + 1}</span>
+                    <span class="text-xs font-medium text-gray-600">Vao ${idx + 1}</span>
                     ${badge}
                 </div>
                 <div class="text-xs text-gray-500">L = ${L.toFixed(2)} m</div>
                 <div class="mt-2 flex justify-between items-center">
-                    <span class="text-xs text-gray-500">δ<sub>max</sub></span>
+                    <span class="text-xs text-gray-500">delta_max</span>
                     <span class="text-sm font-semibold ${textColor}">${maxDeflection.toFixed(2)} cm</span>
                 </div>
+                ${isElsQp ? `
                 <div class="flex justify-between items-center">
-                    <span class="text-xs text-gray-500">δ<sub>lim</sub> (L/250)</span>
+                    <span class="text-xs text-gray-500">delta_lim (L/250)</span>
                     <span class="text-sm text-gray-600">${limitCm.toFixed(2)} cm</span>
                 </div>
                 <div class="mt-2 h-1.5 bg-gray-200 rounded-full overflow-hidden">
                     <div class="h-full ${isOk ? 'bg-emerald-500' : 'bg-amber-500'}" style="width: ${Math.min(utilization, 100)}%"></div>
                 </div>
                 <div class="text-right text-[10px] text-gray-500 mt-1">${utilization.toFixed(0)}%</div>
+                ` : ''}
             </div>
         `;
     });
 
     html += '</div>';
 
-    // Resumo geral
-    const summaryBg = allOk ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700';
-    const summaryIcon = allOk ? '✓' : '⚠';
-    html += `
-        <div class="mt-3 p-2 rounded ${summaryBg} text-sm font-medium text-center">
-            ${summaryIcon} ${allOk ? 'Todos os vãos atendem ao limite L/250' : 'Alguns vãos ultrapassam o limite L/250'}
-        </div>
-    `;
+    if (isElsQp) {
+        const summaryBg = allOk ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700';
+        html += `
+            <div class="mt-3 p-2 rounded ${summaryBg} text-sm font-medium text-center">
+                ${allOk ? 'Todos os vaos atendem ao limite L/250' : 'Alguns vaos ultrapassam o limite L/250'}
+            </div>
+        `;
+    }
 
     infoDiv.innerHTML = html;
     infoDiv.classList.remove('hidden');
 }
 
-/**
- * Oculta o painel de informações ELS-DEF
- */
 function hideDeflectionElsInfo() {
     const infoDiv = document.getElementById('deflection-els-info');
     if (infoDiv) {
@@ -680,6 +675,35 @@ function initDeflectionChart() {
     });
 }
 
+function getDeflectionResultForCase(loadCaseId) {
+    if (!loadProcessor) return null;
+    const data = loadProcessor.getLoadCaseData(loadCaseId);
+    const dataToUse = (data && data.stations) ? data : loadProcessor.getLoadCaseData('DEAD');
+    if (!dataToUse || !dataToUse.stations) return null;
+
+    const inputs = getDetailInputs();
+    const bw = inputs.bw;
+    const h = inputs.h;
+    const fck = getNumericValue('inp-fck', 30);
+    const fyk = inputs.fykLong;
+    const d = computeEffectiveDepth(inputs);
+    const As = computeAsProvided(inputs);
+    const phi = inputs.barPhi;
+    const dLinha = inputs.cover + (inputs.stirrPhi / 10) + (phi / 10) / 2;
+
+    const elsVerifier = new ServiceabilityVerifier({ bw, h, d }, { fck, fyk }, As, { phi, d_linha: dLinha });
+
+    const moments = buildMomentSeries(dataToUse);
+    if (!moments.length) return null;
+
+    return buildDeflectionBySpans(
+        elsVerifier,
+        moments,
+        loadProcessor.frames,
+        loadProcessor.totalLength
+    );
+}
+
 function updateDeflectionChart() {
     if (!loadProcessor) return;
     if (!deflectionChart) {
@@ -687,35 +711,8 @@ function updateDeflectionChart() {
     }
     if (!deflectionChart) return;
     try {
-        const elsData = loadProcessor.getLoadCaseData('ELS_QP');
-        // Se nao tiver ELS_QP, tentar usar DEAD como fallback seguro pra nao dar erro, mas idealmente deve ter ELS_QP
-        const dataToUse = (elsData && elsData.stations) ? elsData : loadProcessor.getLoadCaseData('DEAD');
-
-        if (!dataToUse || !dataToUse.stations) return;
-
-        // Calcular flecha
-        const inputs = getDetailInputs();
-        const bw = inputs.bw;
-        const h = inputs.h;
-        const fck = getNumericValue('inp-fck', 30);
-        const fyk = inputs.fykLong;
-        const d = computeEffectiveDepth(inputs);
-        const As = computeAsProvided(inputs);
-        const phi = inputs.barPhi;
-        const dLinha = inputs.cover + (inputs.stirrPhi / 10) + (phi / 10) / 2;
-
-        const elsVerifier = new ServiceabilityVerifier({ bw, h, d }, { fck, fyk }, As, { phi, d_linha: dLinha });
-
-        // Momentos para flecha (ELS-QP)
-        const momentsQp = buildMomentSeries(dataToUse);
-        if (!momentsQp.length) return;
-
-        const result = buildDeflectionBySpans(
-            elsVerifier,
-            momentsQp,
-            loadProcessor.frames,
-            loadProcessor.totalLength
-        );
+        const result = getDeflectionResultForCase(currentLoadCase);
+        if (!result || !Array.isArray(result.deflections)) return;
 
         deflectionChart.data.labels = result.deflections.map(pt => pt.x);
         deflectionChart.data.datasets[0].data = result.deflections.map(pt => ({ x: pt.x, y: pt.f }));
@@ -859,8 +856,7 @@ function getCombinationFormula(loadCase) {
 function updateChartFormula() {
     const subtitle = document.getElementById('chart-subtitle');
     if (!subtitle) return;
-    const formulaCase = currentChartTarget === 'deflection' ? 'ELS_QP' : currentLoadCase;
-    subtitle.textContent = getCombinationFormula(formulaCase);
+    subtitle.textContent = getCombinationFormula(currentLoadCase);
 }
 
 /**
@@ -936,6 +932,9 @@ function renderLoadCaseFilters() {
             updateChartFormula();
             updateCriticalSections();
             updateDeflectionChart(); // Atualiza flecha sempre que trocar caso
+            if (currentChartTarget === 'deflection') {
+                updateDeflectionElsInfo();
+            }
         });
     });
 }
