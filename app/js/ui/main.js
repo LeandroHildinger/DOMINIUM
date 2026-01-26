@@ -1049,11 +1049,12 @@ function updateCriticalSections(sections = null) {
     const AsComp = inputs.asComp;
     const stirrDia = inputs.stirrPhi / 10;
     const Asw_s = computeStirrupAsw(inputs);
-    const fatigueData = loadProcessor.getLoadCaseData('FADIGA');
 
     container.innerHTML = items.map((section) => {
-        const momentCandidateMax = section.M_max || 0;
-        const momentCandidateMin = section.M_min || 0;
+        const combosAtX = buildCombinationsAtX(section.x);
+        const combos = combosAtX.combos;
+        const momentCandidateMax = combos.ELU.M_max || 0;
+        const momentCandidateMin = combos.ELU.M_min || 0;
         const moment = Math.abs(momentCandidateMax) >= Math.abs(momentCandidateMin)
             ? momentCandidateMax
             : momentCandidateMin;
@@ -1094,7 +1095,7 @@ function updateCriticalSections(sections = null) {
         const flexUtil = flexResult.utilizacao || 0;
         const flexOk = flexResult.status === 'OK';
 
-        const Vsd = Math.max(Math.abs(section.V_max || 0), Math.abs(section.V_min || 0));
+        const Vsd = Math.max(Math.abs(combos.ELU.V_max || 0), Math.abs(combos.ELU.V_min || 0));
         const shearVerifier = new ShearVerifier(
             { bw: inputs.bw, h: inputs.h, d: d },
             { fck: fck, fywk: inputs.fykStirr }
@@ -1106,9 +1107,8 @@ function updateCriticalSections(sections = null) {
         const shearUtilMax = Math.max(shearUtil, bielaUtil);
         const shearOk = shearResult.status === 'OK' && shearUtilMax <= 100;
 
-        const fatigueAtX = getCaseAtX(fatigueData, section.x);
-        const fatigueMmax = fatigueAtX ? fatigueAtX.M_max : section.M_max;
-        const fatigueMmin = fatigueAtX ? fatigueAtX.M_min : section.M_min;
+        const fatigueMmax = combos.FADIGA.M_max || 0;
+        const fatigueMmin = combos.FADIGA.M_min || 0;
         const fatigueVerifier = new FatigueVerifier(
             { bw: inputs.bw, h: inputs.h, d: d },
             { fck: fck, fyk: inputs.fykLong },
@@ -1147,11 +1147,7 @@ function updateCriticalSections(sections = null) {
             AsProv,
             { phi: inputs.barPhi, d_linha: dLinha, wk_lim: inputs.wkLim, As_linha: inputs.asComp }
         );
-        const elsFreqData = loadProcessor.getLoadCaseData('ELS_FREQ');
-        const elsFreqAtX = getCaseAtX(elsFreqData, section.x);
-        const M_freq = elsFreqAtX
-            ? Math.max(Math.abs(elsFreqAtX.M_max || 0), Math.abs(elsFreqAtX.M_min || 0))
-            : momentAbs;
+        const M_freq = Math.max(Math.abs(combos.ELS_FREQ.M_max || 0), Math.abs(combos.ELS_FREQ.M_min || 0));
         const crackResult = serviceVerifier.verifyCrackWidth(M_freq);
         const crackUtil = crackResult.utilizacao || 0;
         const crackOk = crackResult.status === 'OK';
@@ -1172,17 +1168,17 @@ function updateCriticalSections(sections = null) {
                 </div>
                 <div class="mt-3 space-y-2">
                     ${buildUtilRow('Flexao ELU', flexUtil, flexOk)}
-                    ${buildUtilRow('Cisalhamento', shearUtilMax, shearOk)}
+                    ${buildUtilRow('Cisalhamento ELU', shearUtilMax, shearOk)}
                     ${buildUtilRow('Fadiga Aco', fatigueUtil, fatigueOk)}
-                    ${buildUtilRow('Arm. Mínima', asMinUtil, asMinOk)}
-                    ${buildUtilRow('Arm. Máxima', asMaxUtil, asMaxOk)}
+                    ${buildUtilRow('Arm. Minima ELU', asMinUtil, asMinOk)}
+                    ${buildUtilRow('Arm. Maxima ELU', asMaxUtil, asMaxOk)}
                     ${buildUtilRow('Fadiga Conc.', concFatigueUtil, concFatigueOk)}
-                    ${buildUtilRow('Ductilidade', xiUtil, xiOk)}
+                    ${buildUtilRow('Ductilidade ELU', xiUtil, xiOk)}
                     ${buildUtilRow('Fissuração', crackUtil, crackOk)}
                 </div>
                 <div class="mt-3 text-xs text-gray-500">
-                    M = ${formatNumber(section.M_max)} / ${formatNumber(section.M_min)} kN.m<br>
-                    V = ${formatNumber(section.V_max)} / ${formatNumber(section.V_min)} kN
+                    ELU: M = ${formatNumber(combos.ELU.M_max)} / ${formatNumber(combos.ELU.M_min)} kN.m | V = ${formatNumber(combos.ELU.V_max)} / ${formatNumber(combos.ELU.V_min)} kN<br>
+                    FADIGA: M = ${formatNumber(combos.FADIGA.M_max)} / ${formatNumber(combos.FADIGA.M_min)} kN.m | V = ${formatNumber(combos.FADIGA.V_max)} / ${formatNumber(combos.FADIGA.V_min)} kN
                 </div>
             </button>
         `;
