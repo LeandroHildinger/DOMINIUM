@@ -1046,16 +1046,51 @@ function updateCriticalSections(sections = null) {
     const fck = getNumericValue('inp-fck', 30);
     const d = computeEffectiveDepth(inputs);
     const AsProv = computeAsProvided(inputs);
+    const AsComp = inputs.asComp;
+    const stirrDia = inputs.stirrPhi / 10;
     const Asw_s = computeStirrupAsw(inputs);
     const fatigueData = loadProcessor.getLoadCaseData('FADIGA');
 
     container.innerHTML = items.map((section) => {
-        const momentAbs = Math.max(Math.abs(section.M_max || 0), Math.abs(section.M_min || 0));
+        const momentCandidateMax = section.M_max || 0;
+        const momentCandidateMin = section.M_min || 0;
+        const moment = Math.abs(momentCandidateMax) >= Math.abs(momentCandidateMin)
+            ? momentCandidateMax
+            : momentCandidateMin;
+        const momentAbs = Math.abs(moment);
+        const momentPositive = moment >= 0;
+
+        let AsTension = momentPositive ? AsProv : AsComp;
+        let AsCompression = momentPositive ? AsComp : AsProv;
+        let barDiaTension = momentPositive ? inputs.barPhi : inputs.barPhiComp;
+        let barDiaCompression = momentPositive ? inputs.barPhiComp : inputs.barPhi;
+        if (!(AsTension > 0)) {
+            AsTension = AsProv;
+            AsCompression = 0;
+            barDiaTension = inputs.barPhi;
+            barDiaCompression = inputs.barPhiComp;
+        }
+
+        const dFlex = inputs.h - inputs.cover - stirrDia - (barDiaTension / 10) / 2;
+        const dLinhaFlex = inputs.cover + stirrDia + (barDiaCompression / 10) / 2;
         const bendingVerifier = new BendingVerifier(
-            { bw: inputs.bw, h: inputs.h, d: d, c_nom: inputs.cover },
+            { bw: inputs.bw, h: inputs.h, d: dFlex, c_nom: inputs.cover },
             { fck: fck, fyk: inputs.fykLong }
         );
-        const flexResult = bendingVerifier.verifySection(momentAbs, AsProv);
+        let flexUsesCompression = AsCompression > 0 && AsTension > 0;
+        let flexResult = null;
+        if (!(AsTension > 0)) {
+            flexUsesCompression = false;
+            flexResult = { status: 'ERROR', utilizacao: 0, xi: 0 };
+        } else if (flexUsesCompression) {
+            flexResult = bendingVerifier.verifySectionWithCompression(momentAbs, AsTension, AsCompression, dFlex, dLinhaFlex);
+            if (flexResult.status === 'ERROR') {
+                flexUsesCompression = false;
+                flexResult = bendingVerifier.verifySection(momentAbs, AsTension);
+            }
+        } else {
+            flexResult = bendingVerifier.verifySection(momentAbs, AsTension);
+        }
         const flexUtil = flexResult.utilizacao || 0;
         const flexOk = flexResult.status === 'OK';
 
@@ -1086,13 +1121,13 @@ function updateCriticalSections(sections = null) {
 
         // Passo 1: Armadura Mínima (NBR 6118 Item 17.3.5.2.1)
         const As_min = 0.0015 * inputs.bw * inputs.h;
-        const asMinUtil = AsProv > 0 ? (As_min / AsProv) * 100 : 0;
-        const asMinOk = AsProv >= As_min;
+        const asMinUtil = AsTension > 0 ? (As_min / AsTension) * 100 : 0;
+        const asMinOk = AsTension >= As_min;
 
         // Passo 2: Armadura Máxima (NBR 6118 Item 17.3.5.2.4)
         const As_max = 0.04 * inputs.bw * inputs.h;
-        const asMaxUtil = As_max > 0 ? (AsProv / As_max) * 100 : 0;
-        const asMaxOk = AsProv <= As_max;
+        const asMaxUtil = As_max > 0 ? (AsTension / As_max) * 100 : 0;
+        const asMaxOk = AsTension <= As_max;
 
         // Passo 3: Fadiga do Concreto (NBR 6118 Item 23.5.4.1)
         const concFatigueResult = fatigueVerifier.verifyConcreteCompressionFatigue(fatigueMmax || 0);
@@ -1347,11 +1382,23 @@ function getMomentInfo(section) {
     };
 }
 
-function computeDomainData(inputs, momentValue) {
+function computeDomainData(inputs, momentValue, momentPositive = true) {
     const fck = getNumericValue('inp-fck', 30);
-    const barDia = inputs.barPhi / 10;
+    let barDiaTension = (momentPositive ? inputs.barPhi : inputs.barPhiComp) / 10;
+    let barDiaCompression = (momentPositive ? inputs.barPhiComp : inputs.barPhi) / 10;
     const stirrDia = inputs.stirrPhi / 10;
-    const d = inputs.h - inputs.cover - stirrDia - (barDia / 2);
+    let asTension = momentPositive ? computeAsProvided(inputs) : computeAsCompressed(inputs);
+    let asCompression = momentPositive ? computeAsCompressed(inputs) : computeAsProvided(inputs);
+
+    if (!(asTension > 0)) {
+        asTension = computeAsProvided(inputs);
+        asCompression = 0;
+        barDiaTension = inputs.barPhi / 10;
+        barDiaCompression = inputs.barPhiComp / 10;
+    }
+
+    const d = inputs.h - inputs.cover - stirrDia - (barDiaTension / 2);
+    const dLinha = inputs.cover + stirrDia + (barDiaCompression / 2);
 
     if (!Number.isFinite(momentValue) || momentValue <= 0 || d <= 0) {
         return null;
@@ -1360,9 +1407,16 @@ function computeDomainData(inputs, momentValue) {
     const geometry = { bw: inputs.bw, h: inputs.h, d: d, c_nom: inputs.cover };
     const materials = { fck: fck, fyk: inputs.fykLong };
     const verifier = new BendingVerifier(geometry, materials);
-    const design = verifier.designReinforcement(momentValue);
+    const useCompression = asCompression > 0 && asTension > 0;
+    let design = useCompression
+        ? verifier.calcNeutralAxisWithCompression(asTension, asCompression, d, dLinha)
+        : verifier.designReinforcement(momentValue);
 
-    if (design.status === 'ERROR') {
+    if (useCompression && (design.valid === false || !Number.isFinite(design.xi))) {
+        design = verifier.designReinforcement(momentValue);
+    }
+
+    if (design.status === 'ERROR' || design.valid === false) {
         return { ...design, d, domain: 'N/A' };
     }
 
@@ -1374,7 +1428,15 @@ function computeDomainData(inputs, momentValue) {
         domain = 'IV';
     }
 
-    return { ...design, d, domain, xi_23: xi23 };
+    let warning = null;
+    if (useCompression && design.xi > design.xi_lim) {
+        warning = 'Aviso: armadura comprimida leva o estado para fora dos dominios 2 e 3.';
+    }
+    if (useCompression && Number.isFinite(design.Mrd) && momentValue > design.Mrd) {
+        warning = warning || 'Aviso: momento critico excede o momento resistente com armadura dupla.';
+    }
+
+    return { ...design, d, domain, xi_23: xi23, warning, momentBase: momentValue };
 }
 
 
@@ -1416,6 +1478,8 @@ function renderDomainPanel(section, momentInfo, domainData) {
     const x = domainData && Number.isFinite(domainData.x) ? domainData.x : null;
 
     let strainsHtml = '';
+    let warningHtml = '';
+    let mrdHtml = '';
     if (xi !== null) {
         // Usa o método estático para calcular valores para exibição no texto
         const strains = DomainVisualizer.computeStrains(xi, xi23);
@@ -1437,12 +1501,21 @@ function renderDomainPanel(section, momentInfo, domainData) {
         }
     }
 
+    if (domainData && Number.isFinite(domainData.Mrd)) {
+        mrdHtml = `<div class="text-xs text-gray-500">Mrd (armadura dupla): ${domainData.Mrd.toFixed(1)} kN.m</div>`;
+    }
+    if (domainData && domainData.warning) {
+        warningHtml = `<div class="text-xs text-amber-600 mt-1">${domainData.warning}</div>`;
+    }
+
     text.innerHTML = `
         <div class="text-sm font-semibold text-gray-800">Domínio ${domainLabel}</div>
         <div class="text-xs text-gray-500 mt-1">Momento crítico: ${momentInfo.moment.toFixed(1)} kN.m (${momentInfo.sign})</div>
         <div class="text-xs text-gray-500">Face comprimida: ${face}</div>
         ${x !== null ? `<div class="text-xs text-gray-500">Linha neutra: x = ${x.toFixed(2)} cm</div>` : ''}
         ${xi !== null ? `<div class="text-xs text-gray-500">x/d = ${xi.toFixed(3)}</div>` : ''}
+        ${mrdHtml}
+        ${warningHtml}
         ${strainsHtml}
     `;
     updateDomainOverlay(domainData);
@@ -1798,12 +1871,47 @@ function buildSectionMemory(section, inputs, materials) {
     const base = combosAtX.base;
     const combos = combosAtX.combos;
 
-    const momentAbs = Math.max(Math.abs(combos.ELU.M_max || 0), Math.abs(combos.ELU.M_min || 0));
+    const momentCandidateMax = combos.ELU.M_max || 0;
+    const momentCandidateMin = combos.ELU.M_min || 0;
+    const moment = Math.abs(momentCandidateMax) >= Math.abs(momentCandidateMin)
+        ? momentCandidateMax
+        : momentCandidateMin;
+    const momentAbs = Math.abs(moment);
+    const momentPositive = moment >= 0;
+
+    let AsTension = momentPositive ? AsProv : AsComp;
+    let AsCompression = momentPositive ? AsComp : AsProv;
+    let barDiaTension = momentPositive ? inputs.barPhi : inputs.barPhiComp;
+    let barDiaCompression = momentPositive ? inputs.barPhiComp : inputs.barPhi;
+    if (!(AsTension > 0)) {
+        AsTension = AsProv;
+        AsCompression = 0;
+        barDiaTension = inputs.barPhi;
+        barDiaCompression = inputs.barPhiComp;
+    }
+
+    const stirrDia = inputs.stirrPhi / 10;
+    const dFlex = inputs.h - inputs.cover - stirrDia - (barDiaTension / 10) / 2;
+    const dLinhaFlex = inputs.cover + stirrDia + (barDiaCompression / 10) / 2;
+
     const bendingVerifier = new BendingVerifier(
-        { bw: inputs.bw, h: inputs.h, d: d, c_nom: inputs.cover },
+        { bw: inputs.bw, h: inputs.h, d: dFlex, c_nom: inputs.cover },
         { fck: fck, fyk: inputs.fykLong }
     );
-    const flexResult = bendingVerifier.verifySection(momentAbs, AsProv);
+    let flexUsesCompression = AsCompression > 0 && AsTension > 0;
+    let flexResult = null;
+    if (!(AsTension > 0)) {
+        flexUsesCompression = false;
+        flexResult = { status: 'ERROR', utilizacao: 0, xi: 0 };
+    } else if (flexUsesCompression) {
+        flexResult = bendingVerifier.verifySectionWithCompression(momentAbs, AsTension, AsCompression, dFlex, dLinhaFlex);
+        if (flexResult.status === 'ERROR') {
+            flexUsesCompression = false;
+            flexResult = bendingVerifier.verifySection(momentAbs, AsTension);
+        }
+    } else {
+        flexResult = bendingVerifier.verifySection(momentAbs, AsTension);
+    }
 
     const Vsd = Math.max(Math.abs(combos.ELU.V_max || 0), Math.abs(combos.ELU.V_min || 0));
     const shearVerifier = new ShearVerifier(
@@ -1849,7 +1957,7 @@ function buildSectionMemory(section, inputs, materials) {
     const fyd_kNcm2 = fyd * 0.1;
     const lambda = 0.8;
     const a = 0.5 * lambda ** 2 * inputs.bw * sigma_cd_kNcm2;
-    const b = -lambda * inputs.bw * sigma_cd_kNcm2 * d;
+    const b = -lambda * inputs.bw * sigma_cd_kNcm2 * dFlex;
     const c = Md_kNcm;
     const delta = b ** 2 - 4 * a * c;
 
@@ -1894,8 +2002,8 @@ function buildSectionMemory(section, inputs, materials) {
                 <div>bw = ${memUnit(inputs.bw, 'cm')}</div>
                 <div>h = ${memUnit(inputs.h, 'cm')}</div>
                 <div>c_nom = ${memUnit(inputs.cover, 'cm')}</div>
-                <div>d = ${memUnit(d, 'cm')}</div>
-                <div>d' = ${memUnit(dLinha, 'cm')}</div>
+                <div>d = ${memUnit(dFlex, 'cm')}</div>
+                <div>d' = ${memUnit(dLinhaFlex, 'cm')}</div>
                 <div>n_barras_tracao = ${inputs.nBars}</div>
                 <div>phi_tracao = ${memUnit(inputs.barPhi, 'mm')}</div>
                 <div>As_tracao = ${memUnit(AsProv, 'cm2')}</div>
@@ -1941,11 +2049,18 @@ function buildSectionMemory(section, inputs, materials) {
         </div>
     `;
 
-    const flexHtml = `
-        <details class="border rounded-lg bg-white">
-            <summary class="cursor-pointer px-4 py-2 text-sm font-semibold text-gray-700">Flexao ELU</summary>
-            <div class="px-4 pb-4 space-y-2 text-xs text-gray-600">
-                <pre class="whitespace-pre-wrap bg-slate-50 border rounded p-3">
+    const flexLines = flexUsesCompression ? `
+Md = max(|M_elu_max|, |M_elu_min|) = max(|${memUnit(combos.ELU.M_max, 'kN.m')}|, |${memUnit(combos.ELU.M_min, 'kN.m')}|) = ${memUnit(Md, 'kN.m')}
+As_tracao = ${memUnit(AsTension, 'cm2')}
+As_comp = ${memUnit(AsCompression, 'cm2')}
+d = ${memUnit(dFlex, 'cm')}
+d' = ${memUnit(dLinhaFlex, 'cm')}
+x = ${memUnit(flexResult.x, 'cm')}
+xi = x/d = ${memNum(xi, 3)} (limite 0.45)
+Mrd (armadura dupla) = ${memUnit(flexResult.Mrd || 0, 'kN.m')}
+utilizacao = Md/Mrd = ${memPercent(flexResult.utilizacao || 0)}
+status = ${flexResult.status}
+    ` : `
 Md = max(|M_elu_max|, |M_elu_min|) = max(|${memUnit(combos.ELU.M_max, 'kN.m')}|, |${memUnit(combos.ELU.M_min, 'kN.m')}|) = ${memUnit(Md, 'kN.m')}
 Md = ${memUnit(Md_kNcm, 'kN.cm')}
 fcd = fck/1.4 = ${fck}/1.4 = ${memUnit(fcd, 'MPa')}
@@ -1963,7 +2078,13 @@ As_min = 0.0015*bw*h = ${memUnit(As_min, 'cm2')}
 As_final = max(As_calc, As_min) = ${memUnit(flexResult.As_final, 'cm2')}
 utilizacao = As_final/As_prov = ${memPercent(flexResult.utilizacao || 0)}
 status = ${flexResult.status}
-                </pre>
+    `;
+
+    const flexHtml = `
+        <details class="border rounded-lg bg-white">
+            <summary class="cursor-pointer px-4 py-2 text-sm font-semibold text-gray-700">Flexao ELU</summary>
+            <div class="px-4 pb-4 space-y-2 text-xs text-gray-600">
+                <pre class="whitespace-pre-wrap bg-slate-50 border rounded p-3">${flexLines}</pre>
             </div>
         </details>
     `;
@@ -2036,9 +2157,9 @@ status = ${concFatigueResult.status}
                 <pre class="whitespace-pre-wrap bg-slate-50 border rounded p-3">
 As_min = 0.0015*bw*h = ${memUnit(As_min, 'cm2')}
 As_max = 0.04*bw*h = ${memUnit(As_max, 'cm2')}
-As_prov = ${memUnit(AsProv, 'cm2')}
-min_ok = ${AsProv >= As_min ? 'OK' : 'ALERTA'}
-max_ok = ${AsProv <= As_max ? 'OK' : 'ALERTA'}
+As_prov = ${memUnit(AsTension, 'cm2')}
+min_ok = ${AsTension >= As_min ? 'OK' : 'ALERTA'}
+max_ok = ${AsTension <= As_max ? 'OK' : 'ALERTA'}
                 </pre>
             </div>
         </details>
@@ -2465,7 +2586,7 @@ function updateDetailView() {
     const section = getSelectedDetailSection();
     const inputs = getDetailInputs();
     const momentInfo = getMomentInfo(section);
-    const domainData = section ? computeDomainData(inputs, momentInfo.abs) : null;
+    const domainData = section ? computeDomainData(inputs, momentInfo.abs, momentInfo.isPositive) : null;
     const header = document.getElementById('detail-section-info');
     const label = document.getElementById('detail-section-label');
 
