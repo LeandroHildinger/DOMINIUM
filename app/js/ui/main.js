@@ -841,13 +841,13 @@ function safeUtilization(value) {
 function getCombinationFormula(loadCase) {
     switch (loadCase) {
         case 'ELU':
-            return 'ELU = 1.4*(G + Trilho) + 1.4*(Q*CIV*CIA*CNF)';
+            return 'ELU = 1.4*(G + T) + 1.4*(Q*CIV*CIA*CNF)';
         case 'FADIGA':
-            return 'Fadiga = 1.0*(G + Trilho) + 1.0*(Q*CIV*CIA*CNF)';
+            return 'Fadiga = 1.0*(G + T) + 1.0*(Q*CIV*CIA*CNF)';
         case 'ELS_QP':
-            return 'ELS-QP = 1.0*(G + Trilho) + 0.5*(Q*CIV*CIA*CNF)';
+            return 'ELS-QP = 1.0*(G + T) + 0.5*(Q*CIV*CIA*CNF)';
         case 'ELS_FREQ':
-            return 'ELS-FREQ = 1.0*(G + Trilho) + 0.8*(Q*CIV*CIA*CNF)';
+            return 'ELS-FREQ = 1.0*(G + T) + 0.8*(Q*CIV*CIA*CNF)';
         default:
             return '';
     }

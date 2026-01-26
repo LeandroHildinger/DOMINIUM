@@ -346,13 +346,13 @@ export class LoadProcessor {
 
     getAvailableLoadCases() {
         return [
-            { id: "DEAD", label: "Peso Próprio", color: "#607d8b" },
-            { id: "TRILHO", label: "Trilho", color: "#795548" },
-            { id: "ENV_MOVEL", label: "Trem (Carga Móvel)", color: "#ff5722" },
-            { id: "ELU", label: "ELU (Combinado)", color: "#d32f2f" },
+            { id: "DEAD", label: "G (Peso Proprio)", color: "#607d8b" },
+            { id: "TRILHO", label: "T (Trilho)", color: "#795548" },
+            { id: "ENV_MOVEL", label: "Q (Carga Movel)", color: "#ff5722" },
+            { id: "ELU", label: "ELU (Combinacao)", color: "#d32f2f" },
             { id: "FADIGA", label: "Fadiga (Frequente)", color: "#7b1fa2" },
-            { id: "ELS_QP", label: "Flecha (Q. Perm.)", color: "#9c27b0" },
-            { id: "ELS_FREQ", label: "Abertura de Fissura (Freq.)", color: "#00bcd4" }
+            { id: "ELS_QP", label: "ELS-QP (Flecha)", color: "#9c27b0" },
+            { id: "ELS_FREQ", label: "ELS-FREQ (Fissuracao)", color: "#00bcd4" }
         ];
     }
 
