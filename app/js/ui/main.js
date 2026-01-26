@@ -64,6 +64,11 @@ function computeAsProvided(inputs) {
     return inputs.nBars * Math.PI * (barDia / 2) ** 2;
 }
 
+function computeAsCompressed(inputs) {
+    const barDia = inputs.barPhiComp / 10;
+    return inputs.nBarsComp * Math.PI * (barDia / 2) ** 2;
+}
+
 function computeStirrupAsw(inputs) {
     const stirrDia = inputs.stirrPhi / 10;
     const area = Math.PI * (stirrDia / 2) ** 2;
@@ -77,6 +82,13 @@ function computeCiv(span) {
     if (span < 10) return 1.35;
     if (span <= 200) return 1 + 1.06 * (20 / (span + 50));
     return 1.0;
+}
+
+function computeCompressionCover(inputs) {
+    const stirrDia = inputs.stirrPhi / 10;
+    const barPhi = inputs.nBarsComp > 0 ? inputs.barPhiComp : inputs.barPhi;
+    const barDia = barPhi / 10;
+    return inputs.cover + stirrDia + barDia / 2;
 }
 
 function syncImpactInputs() {
@@ -93,6 +105,25 @@ function setupImpactInputs() {
     if (!spanEl) return;
     spanEl.addEventListener('input', syncImpactInputs);
     spanEl.addEventListener('change', syncImpactInputs);
+}
+
+function syncWkLimitFromCaa() {
+    const caaEl = document.getElementById('inp-caa');
+    const wkEl = document.getElementById('inp-wk-lim');
+    if (!caaEl || !wkEl) return;
+    const option = caaEl.options[caaEl.selectedIndex];
+    const wk = parseFloat(option?.dataset?.wk || '');
+    if (Number.isFinite(wk)) {
+        wkEl.value = wk.toFixed(2);
+    }
+}
+
+function setupServiceInputs() {
+    const caaEl = document.getElementById('inp-caa');
+    if (!caaEl) return;
+    caaEl.addEventListener('change', syncWkLimitFromCaa);
+    caaEl.addEventListener('input', syncWkLimitFromCaa);
+    syncWkLimitFromCaa();
 }
 
 function buildUtilRow(label, util, ok) {
@@ -691,7 +722,12 @@ function getDeflectionResultForCase(loadCaseId) {
     const phi = inputs.barPhi;
     const dLinha = inputs.cover + (inputs.stirrPhi / 10) + (phi / 10) / 2;
 
-    const elsVerifier = new ServiceabilityVerifier({ bw, h, d }, { fck, fyk }, As, { phi, d_linha: dLinha });
+    const elsVerifier = new ServiceabilityVerifier(
+        { bw, h, d },
+        { fck, fyk },
+        As,
+        { phi, d_linha: dLinha, As_linha: inputs.asComp }
+    );
 
     const moments = buildMomentSeries(dataToUse);
     if (!moments.length) return null;
@@ -1069,14 +1105,12 @@ function updateCriticalSections(sections = null) {
         const xiOk = xi <= 0.45;
 
         // Passo 5: Fissuração ELS-W (NBR 6118 Item 13.4.2)
-        const barDia = inputs.barPhi / 10;
-        const stirrDia = inputs.stirrPhi / 10;
-        const dLinha = inputs.cover + stirrDia + barDia / 2;
+        const dLinha = computeCompressionCover(inputs);
         const serviceVerifier = new ServiceabilityVerifier(
             { bw: inputs.bw, h: inputs.h, d: d },
             { fck: fck, fyk: inputs.fykLong },
             AsProv,
-            { phi: inputs.barPhi, d_linha: dLinha }
+            { phi: inputs.barPhi, d_linha: dLinha, wk_lim: inputs.wkLim, As_linha: inputs.asComp }
         );
         const elsFreqData = loadProcessor.getLoadCaseData('ELS_FREQ');
         const elsFreqAtX = getCaseAtX(elsFreqData, section.x);
@@ -1171,6 +1205,7 @@ function runCalculation() {
     updateDeflectionChart();
     updateSummary();
     refreshDetailSections(sections);
+    updateMemoriaCalculo(sections);
 }
 
 /**
@@ -1245,6 +1280,8 @@ function getDetailInputs() {
     const cover = getNumericValue('inp-cover', 3);
     const nBars = Math.max(1, parseInt(getNumericValue('inp-nbars', 5), 10));
     const barPhi = getNumericValue('inp-phi', 20);
+    const nBarsComp = Math.max(0, parseInt(getNumericValue('inp-nbars-comp', 0), 10));
+    const barPhiComp = getNumericValue('inp-phi-comp', 12.5);
     const layers = Math.max(1, parseInt(getNumericValue('inp-layers', 3), 10));
     const clearSpacing = getNumericValue('inp-clear-spacing', 2.5);
     const stirrPhi = getNumericValue('inp-stirr-phi', 8);
@@ -1253,10 +1290,13 @@ function getDetailInputs() {
     const fykStirr = getNumericValue('inp-fyk-stirr', 500);
     const fykLongLabel = getSelectLabel('inp-fyk-long', 'CA-50');
     const fykStirrLabel = getSelectLabel('inp-fyk-stirr', 'CA-50');
+    const wkLim = getNumericValue('inp-wk-lim', 0.30);
+    const caaLabel = getSelectLabel('inp-caa', 'CAA II');
     const span = getNumericValue('inp-span', 12);
     const cia = getNumericValue('inp-cia', 1.25);
     const cnf = getNumericValue('inp-cnf', 1.0);
     const civ = computeCiv(span);
+    const asComp = computeAsCompressed({ nBarsComp, barPhiComp });
 
     return {
         bw,
@@ -1264,6 +1304,8 @@ function getDetailInputs() {
         cover,
         nBars,
         barPhi,
+        nBarsComp,
+        barPhiComp,
         layers,
         clearSpacing,
         stirrPhi,
@@ -1272,6 +1314,9 @@ function getDetailInputs() {
         fykStirr,
         fykLongLabel,
         fykStirrLabel,
+        asComp,
+        wkLim,
+        caaLabel,
         span,
         cia,
         cnf,
@@ -1403,6 +1448,679 @@ function renderDomainPanel(section, momentInfo, domainData) {
     updateDomainOverlay(domainData);
 }
 
+
+const MEMORY_UNIT_DIGITS = {
+    'kN': 1,
+    'kN.m': 1,
+    'kN.cm': 1,
+    'cm': 2,
+    'cm2': 2,
+    'm': 2,
+    'cm2/m': 2,
+    'mm': 2,
+    'MPa': 2,
+    'GPa': 2,
+    '1/cm': 6,
+    '%': 1
+};
+
+function memNum(value, digits = 2) {
+    return Number.isFinite(value) ? value.toFixed(digits) : '0.00';
+}
+
+function memUnit(value, unit, digitsOverride) {
+    const digits = Number.isFinite(digitsOverride)
+        ? digitsOverride
+        : (MEMORY_UNIT_DIGITS[unit] ?? 2);
+    return `${memNum(value, digits)} ${unit}`;
+}
+
+function memPercent(value, digits = 1) {
+    return `${memNum(value, digits)} %`;
+}
+
+function getSimpleCaseAtX(data, x) {
+    if (!data || !Array.isArray(data.stations) || !data.stations.length) {
+        return { M: 0, V: 0 };
+    }
+    const idx = findClosestIndex(data.stations, x);
+    return {
+        M: data.M_values?.[idx] ?? 0,
+        V: data.V_values?.[idx] ?? 0
+    };
+}
+
+function buildBaseActionsAtX(x) {
+    const dead = loadProcessor.getLoadCaseData('DEAD');
+    const trilho = loadProcessor.getLoadCaseData('TRILHO');
+    const envMovel = loadProcessor.getLoadCaseData('ENV_MOVEL');
+
+    const deadAt = getSimpleCaseAtX(dead, x);
+    const trilhoAt = getSimpleCaseAtX(trilho, x);
+    const envAt = getCaseAtX(envMovel, x) || { M_max: 0, M_min: 0, V_max: 0, V_min: 0 };
+
+    const M_perm = deadAt.M + trilhoAt.M;
+    const V_perm = deadAt.V + trilhoAt.V;
+
+    return {
+        deadAt,
+        trilhoAt,
+        envAt,
+        M_perm,
+        V_perm
+    };
+}
+
+function buildCombinationsAtX(x) {
+    const base = buildBaseActionsAtX(x);
+    const M_perm = base.M_perm;
+    const V_perm = base.V_perm;
+
+    const Mq_max = base.envAt.M_max || 0;
+    const Mq_min = base.envAt.M_min || 0;
+    const Vq_max = base.envAt.V_max || 0;
+    const Vq_min = base.envAt.V_min || 0;
+
+    return {
+        base,
+        combos: {
+            ELU: {
+                M_max: 1.4 * M_perm + 1.4 * Mq_max,
+                M_min: 1.4 * M_perm + 1.4 * Mq_min,
+                V_max: 1.4 * V_perm + 1.4 * Vq_max,
+                V_min: 1.4 * V_perm + 1.4 * Vq_min
+            },
+            FADIGA: {
+                M_max: 1.0 * M_perm + 1.0 * Mq_max,
+                M_min: 1.0 * M_perm + 1.0 * Mq_min,
+                V_max: 1.0 * V_perm + 1.0 * Vq_max,
+                V_min: 1.0 * V_perm + 1.0 * Vq_min
+            },
+            ELS_QP: {
+                M_max: 1.0 * M_perm + 0.5 * Mq_max,
+                M_min: 1.0 * M_perm + 0.5 * Mq_min,
+                V_max: 1.0 * V_perm + 0.5 * Vq_max,
+                V_min: 1.0 * V_perm + 0.5 * Vq_min
+            },
+            ELS_FREQ: {
+                M_max: 1.0 * M_perm + 0.8 * Mq_max,
+                M_min: 1.0 * M_perm + 0.8 * Mq_min,
+                V_max: 1.0 * V_perm + 0.8 * Vq_max,
+                V_min: 1.0 * V_perm + 0.8 * Vq_min
+            }
+        }
+    };
+}
+
+function buildDeflectionDetailBySpan(elsVerifier, moments, span) {
+    const spanLength = span.endX - span.startX;
+    if (spanLength <= 0) return null;
+
+    const spanMoments = moments
+        .filter((pt) => pt.x >= span.startX - 1e-6 && pt.x <= span.endX + 1e-6)
+        .map((pt) => ({ x: pt.x - span.startX, M: pt.M }));
+
+    if (spanMoments.length < 2) return null;
+
+    const L_cm = spanLength * 100;
+    const curvatures = spanMoments.map((pt) => {
+        const EI_eq = elsVerifier.calcEquivalentStiffness(pt.M);
+        const M_kNcm = pt.M * 100;
+        return {
+            x_cm: pt.x * 100,
+            x_m: pt.x,
+            M: pt.M,
+            EI_eq: EI_eq,
+            kappa: EI_eq > 0 ? M_kNcm / EI_eq : 0
+        };
+    });
+
+    const rotations = [{ x_cm: curvatures[0].x_cm, theta: 0 }];
+    for (let i = 1; i < curvatures.length; i++) {
+        const dx = curvatures[i].x_cm - curvatures[i - 1].x_cm;
+        const avgKappa = (curvatures[i].kappa + curvatures[i - 1].kappa) / 2;
+        const theta = rotations[i - 1].theta + avgKappa * dx;
+        rotations.push({ x_cm: curvatures[i].x_cm, theta: theta });
+    }
+
+    const deflections = [{ x_cm: rotations[0].x_cm, f: 0 }];
+    for (let i = 1; i < rotations.length; i++) {
+        const dx = rotations[i].x_cm - rotations[i - 1].x_cm;
+        const avgTheta = (rotations[i].theta + rotations[i - 1].theta) / 2;
+        const f = deflections[i - 1].f + avgTheta * dx;
+        deflections.push({ x_cm: rotations[i].x_cm, f: f });
+    }
+
+    const f_L = deflections[deflections.length - 1].f;
+    const points = deflections.map((pt, idx) => {
+        const f0 = pt.f - f_L * (pt.x_cm / L_cm);
+        return {
+            x_m: curvatures[idx].x_m,
+            M: curvatures[idx].M,
+            EI_eq: curvatures[idx].EI_eq,
+            kappa: curvatures[idx].kappa,
+            theta: rotations[idx].theta,
+            f0: f0
+        };
+    });
+
+    let maxDeflection = 0;
+    let maxX = 0;
+    for (const pt of points) {
+        const absF = Math.abs(pt.f0);
+        if (absF > Math.abs(maxDeflection)) {
+            maxDeflection = pt.f0;
+            maxX = pt.x_m;
+        }
+    }
+
+    return {
+        spanLength,
+        points,
+        maxDeflection,
+        maxX
+    };
+}
+
+function buildDeflectionDetailBySpans(elsVerifier, moments, frames, totalLength) {
+    const spans = Array.isArray(frames) && frames.length
+        ? frames.map((frame) => {
+            const startX = Number.isFinite(frame.startX) ? frame.startX : 0;
+            const endX = Number.isFinite(frame.endX)
+                ? frame.endX
+                : (Number.isFinite(frame.length) ? startX + frame.length : totalLength || 0);
+            return { startX, endX };
+        })
+        : [{ startX: 0, endX: totalLength || 0 }];
+
+    const alpha_f = elsVerifier.calcCreepFactor();
+    const factor = 1 + alpha_f;
+
+    const spanDetails = [];
+    for (const span of spans) {
+        const detail = buildDeflectionDetailBySpan(elsVerifier, moments, span);
+        if (!detail) continue;
+
+        const f_total = Math.abs(detail.maxDeflection) * factor;
+        const f_lim = (detail.spanLength * 100) / 250;
+        const utilization = f_lim > 0 ? (f_total / f_lim) * 100 : 0;
+        const status = f_total <= f_lim ? 'OK' : 'FAIL';
+
+        spanDetails.push({
+            ...detail,
+            span,
+            alpha_f,
+            factor,
+            f_total,
+            f_lim,
+            utilization,
+            status
+        });
+    }
+
+    return {
+        spans: spanDetails,
+        alpha_f,
+        factor
+    };
+}
+
+function buildMemoriaDeflection(inputs, materials) {
+    const container = [];
+    const dataElsQp = loadProcessor.getLoadCaseData('ELS_QP');
+    if (!dataElsQp || !Array.isArray(dataElsQp.stations) || dataElsQp.stations.length < 2) {
+        return `
+            <details class="border rounded-lg bg-white">
+                <summary class="cursor-pointer px-4 py-3 font-semibold text-gray-700">ELS-QP (Flecha) - Por vao</summary>
+                <div class="px-4 pb-4 text-xs text-gray-500">Sem dados suficientes para a flecha.</div>
+            </details>
+        `;
+    }
+
+    const bw = inputs.bw;
+    const h = inputs.h;
+    const fck = getNumericValue('inp-fck', 30);
+    const fyk = inputs.fykLong;
+    const d = computeEffectiveDepth(inputs);
+    const As = computeAsProvided(inputs);
+    const dLinha = computeCompressionCover(inputs);
+
+    const elsVerifier = new ServiceabilityVerifier(
+        { bw, h, d },
+        { fck, fyk },
+        As,
+        { phi: inputs.barPhi, d_linha: dLinha, As_linha: inputs.asComp }
+    );
+
+    const moments = buildMomentSeries(dataElsQp);
+    const detail = buildDeflectionDetailBySpans(
+        elsVerifier,
+        moments,
+        loadProcessor.frames,
+        loadProcessor.totalLength
+    );
+
+    const header = `
+        <details class="border rounded-lg bg-white">
+            <summary class="cursor-pointer px-4 py-3 font-semibold text-gray-700">ELS-QP (Flecha) - Por vao</summary>
+            <div class="px-4 pb-4 space-y-4">
+                <div class="text-xs text-gray-500">
+                    Combina-se 1.0*G + 0.5*Q (quase permanente). A flecha total considera fluencia.
+                </div>
+                <div class="grid grid-cols-2 gap-3 text-xs text-gray-600">
+                    <div><span class="text-gray-500">Ecs</span> ${memUnit(materials.concrete.Ecs, 'MPa')}</div>
+                    <div><span class="text-gray-500">fctm</span> ${memUnit(materials.concrete.fctm, 'MPa')}</div>
+                    <div><span class="text-gray-500">Mr</span> ${memUnit(elsVerifier.Mr, 'kN.m')}</div>
+                    <div><span class="text-gray-500">Ic</span> ${memNum(elsVerifier.Ic, 0)} cm4</div>
+                    <div><span class="text-gray-500">I_II</span> ${memNum(elsVerifier.I_II, 0)} cm4</div>
+                    <div><span class="text-gray-500">alpha_f</span> ${memNum(detail.alpha_f, 3)}</div>
+                </div>
+    `;
+
+    container.push(header);
+
+    detail.spans.forEach((spanDetail, idx) => {
+        const rows = spanDetail.points.map((pt) => `
+            <tr>
+                <td class="px-2 py-1">${memNum(pt.x_m, 2)}</td>
+                <td class="px-2 py-1">${memNum(pt.M, 2)}</td>
+                <td class="px-2 py-1">${memNum(pt.EI_eq, 0)}</td>
+                <td class="px-2 py-1">${memNum(pt.kappa, 6)}</td>
+                <td class="px-2 py-1">${memNum(pt.theta, 6)}</td>
+                <td class="px-2 py-1">${memNum(pt.f0, 3)}</td>
+                <td class="px-2 py-1">${memNum(pt.f0 * spanDetail.factor, 3)}</td>
+            </tr>
+        `).join('');
+
+        container.push(`
+            <details class="border rounded-lg bg-slate-50">
+                <summary class="cursor-pointer px-4 py-2 text-sm font-semibold text-gray-700">
+                    Vao ${idx + 1} | L = ${memUnit(spanDetail.spanLength, 'm', 2)} | f_total = ${memUnit(spanDetail.f_total, 'cm')} | limite = ${memUnit(spanDetail.f_lim, 'cm')} | ${spanDetail.status}
+                </summary>
+                <div class="px-4 pb-4 space-y-3 text-xs text-gray-600">
+                    <div>
+                        <div class="font-semibold text-gray-700 mb-1">Formulas principais</div>
+                        <pre class="whitespace-pre-wrap bg-white border rounded p-3 text-xs text-gray-700">
+EI_eq = Ecs * Ic * (Mr/Ma)^3 + Ecs * I_II * (1 - (Mr/Ma)^3)
+curvatura kappa = M / EI_eq
+rotacao: theta_i = theta_{i-1} + (kappa_i + kappa_{i-1})/2 * dx
+flecha: f_i = f_{i-1} + (theta_i + theta_{i-1})/2 * dx
+ajuste: f_corr = f - f(L) * x / L
+flecha total: f_total = f0 * (1 + alpha_f)
+limite: f_lim = L/250
+                        </pre>
+                    </div>
+                    <div>
+                        <div class="font-semibold text-gray-700 mb-1">Tabela passo a passo (integracao numerica)</div>
+                        <div class="overflow-auto border rounded bg-white">
+                            <table class="min-w-full text-xs">
+                                <thead class="bg-slate-100 text-gray-600">
+                                    <tr>
+                                        <th class="px-2 py-1 text-left">x (m)</th>
+                                        <th class="px-2 py-1 text-left">M (kN.m)</th>
+                                        <th class="px-2 py-1 text-left">EI_eq (kN.cm2)</th>
+                                        <th class="px-2 py-1 text-left">kappa (1/cm)</th>
+                                        <th class="px-2 py-1 text-left">theta</th>
+                                        <th class="px-2 py-1 text-left">f0 (cm)</th>
+                                        <th class="px-2 py-1 text-left">f_total (cm)</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${rows}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-2 gap-3">
+                        <div>f0,max = ${memUnit(Math.abs(spanDetail.maxDeflection), 'cm')}</div>
+                        <div>alpha_f = ${memNum(spanDetail.alpha_f, 3)}</div>
+                        <div>f_total = ${memUnit(spanDetail.f_total, 'cm')}</div>
+                        <div>f_lim = ${memUnit(spanDetail.f_lim, 'cm')}</div>
+                        <div>utilizacao = ${memPercent(spanDetail.utilization)}</div>
+                    </div>
+                </div>
+            </details>
+        `);
+    });
+
+    container.push('</div></details>');
+    return container.join('');
+}
+
+function buildSectionMemory(section, inputs, materials) {
+    const fck = getNumericValue('inp-fck', 30);
+    const d = computeEffectiveDepth(inputs);
+    const AsProv = computeAsProvided(inputs);
+    const AsComp = inputs.asComp;
+    const dLinha = computeCompressionCover(inputs);
+
+    const combosAtX = buildCombinationsAtX(section.x);
+    const base = combosAtX.base;
+    const combos = combosAtX.combos;
+
+    const momentAbs = Math.max(Math.abs(combos.ELU.M_max || 0), Math.abs(combos.ELU.M_min || 0));
+    const bendingVerifier = new BendingVerifier(
+        { bw: inputs.bw, h: inputs.h, d: d, c_nom: inputs.cover },
+        { fck: fck, fyk: inputs.fykLong }
+    );
+    const flexResult = bendingVerifier.verifySection(momentAbs, AsProv);
+
+    const Vsd = Math.max(Math.abs(combos.ELU.V_max || 0), Math.abs(combos.ELU.V_min || 0));
+    const shearVerifier = new ShearVerifier(
+        { bw: inputs.bw, h: inputs.h, d: d },
+        { fck: fck, fywk: inputs.fykStirr }
+    );
+    const shearResult = shearVerifier.designStirrupsELU(Vsd);
+    const Asw_s = computeStirrupAsw(inputs);
+    const AswFinal = Number.isFinite(shearResult.Asw_final) ? shearResult.Asw_final : 0;
+    const shearUtil = Asw_s > 0 ? (AswFinal / Asw_s) * 100 : 0;
+    const bielaUtil = Number.isFinite(shearResult.ratioBiela) ? shearResult.ratioBiela : 0;
+
+    const fatigueVerifier = new FatigueVerifier(
+        { bw: inputs.bw, h: inputs.h, d: d },
+        { fck: fck, fyk: inputs.fykLong },
+        AsProv,
+        inputs.barPhi
+    );
+    const fatigueResult = fatigueVerifier.verifySteelFatigue(combos.FADIGA.M_max || 0, combos.FADIGA.M_min || 0);
+    const concFatigueResult = fatigueVerifier.verifyConcreteCompressionFatigue(combos.FADIGA.M_max || 0);
+
+    const serviceVerifier = new ServiceabilityVerifier(
+        { bw: inputs.bw, h: inputs.h, d: d },
+        { fck: fck, fyk: inputs.fykLong },
+        AsProv,
+        { phi: inputs.barPhi, d_linha: dLinha, wk_lim: inputs.wkLim, As_linha: AsComp }
+    );
+    const M_freq = Math.max(Math.abs(combos.ELS_FREQ.M_max || 0), Math.abs(combos.ELS_FREQ.M_min || 0));
+    const crackResult = serviceVerifier.verifyCrackWidth(M_freq);
+
+    const fcd = materials.concrete.fcd;
+    const sigma_cd = materials.concrete.sigmaCD;
+    const fyd = materials.steel.fyd;
+    const fctm = materials.concrete.fctm;
+    const fctk_inf = materials.concrete.fctk_inf;
+    const fctd = materials.concrete.fctd;
+    const Es = materials.steel.Es;
+    const Ecs = materials.concrete.Ecs;
+
+    const Md = momentAbs;
+    const Md_kNcm = Md * 100;
+    const sigma_cd_kNcm2 = sigma_cd * 0.1;
+    const fyd_kNcm2 = fyd * 0.1;
+    const lambda = 0.8;
+    const a = 0.5 * lambda ** 2 * inputs.bw * sigma_cd_kNcm2;
+    const b = -lambda * inputs.bw * sigma_cd_kNcm2 * d;
+    const c = Md_kNcm;
+    const delta = b ** 2 - 4 * a * c;
+
+    const xi = flexResult.xi || 0;
+    const z = flexResult.z || 0;
+
+    const As_min = 0.0015 * inputs.bw * inputs.h;
+    const As_max = 0.04 * inputs.bw * inputs.h;
+
+    const alphaV2 = 1 - fck / 250;
+    const fcd_kNcm2 = fcd * 0.1;
+    const Vrd2 = 0.27 * alphaV2 * fcd_kNcm2 * inputs.bw * d;
+    const fctd_kNcm2 = fctd * 0.1;
+    const Vc0 = 0.6 * fctd_kNcm2 * inputs.bw * d;
+    const Vsw = Math.max(0, Vsd - Vc0);
+    const fywd = Math.min(inputs.fykStirr / 1.15, 435);
+    const fywd_kNcm2 = fywd * 0.1;
+    const Asw_calc = Vsw > 0 ? (Vsw / (0.9 * d * fywd_kNcm2)) * 100 : 0;
+    const rhoSwMin = 0.2 * fctm / inputs.fykStirr;
+    const Asw_min = rhoSwMin * inputs.bw * 100;
+    const sMax = Vsd <= 0.67 * Vrd2 ? Math.min(0.6 * d, 30) : Math.min(0.3 * d, 20);
+
+    const n = Es / Ecs;
+    const xII_fad = fatigueVerifier.x_II || 0;
+    const I_II_fad = fatigueVerifier.I_II || 0;
+    const sigmaMax = fatigueResult.sigmaMax || 0;
+    const sigmaMin = fatigueResult.sigmaMin || 0;
+    const deltaSigma = fatigueResult.deltaSigma || 0;
+
+    const h_cri = 2.5 * (inputs.h - d);
+    const Acri = inputs.bw * Math.min(h_cri, inputs.h / 2);
+    const rho_ri = Acri > 0 ? AsProv / Acri : 0;
+    const sigma_si = serviceVerifier.calcSteelStress(M_freq);
+    const wk1 = (inputs.barPhi / (12.5 * 2.25)) * (sigma_si / Es) * (3 * sigma_si / fctm);
+    const wk2 = (inputs.barPhi / (12.5 * 2.25)) * (sigma_si / Es) * (4 / rho_ri + 45);
+    const wk = Math.min(wk1, wk2);
+
+    const inputsHtml = `
+        <div class="bg-slate-50 border rounded-lg p-3">
+            <div class="text-xs font-semibold text-gray-700 mb-2">Dados de entrada (secao retangular)</div>
+            <div class="grid grid-cols-2 gap-2 text-xs text-gray-600">
+                <div>bw = ${memUnit(inputs.bw, 'cm')}</div>
+                <div>h = ${memUnit(inputs.h, 'cm')}</div>
+                <div>c_nom = ${memUnit(inputs.cover, 'cm')}</div>
+                <div>d = ${memUnit(d, 'cm')}</div>
+                <div>d' = ${memUnit(dLinha, 'cm')}</div>
+                <div>n_barras_tracao = ${inputs.nBars}</div>
+                <div>phi_tracao = ${memUnit(inputs.barPhi, 'mm')}</div>
+                <div>As_tracao = ${memUnit(AsProv, 'cm2')}</div>
+                <div>n_barras_comp = ${inputs.nBarsComp}</div>
+                <div>phi_comp = ${memUnit(inputs.barPhiComp, 'mm')}</div>
+                <div>As_comp = ${memUnit(AsComp, 'cm2')}</div>
+                <div>phi_est = ${memUnit(inputs.stirrPhi, 'mm')}</div>
+                <div>fck = ${memUnit(fck, 'MPa')}</div>
+                <div>fyk = ${memUnit(inputs.fykLong, 'MPa')}</div>
+                <div>fywk = ${memUnit(inputs.fykStirr, 'MPa')}</div>
+                <div>wk_lim = ${memUnit(inputs.wkLim, 'mm')}</div>
+                <div>CAA = ${inputs.caaLabel}</div>
+                <div>CIV = ${memNum(inputs.civ, 3)}</div>
+                <div>CIA = ${memNum(inputs.cia, 2)}</div>
+                <div>CNF = ${memNum(inputs.cnf, 2)}</div>
+            </div>
+        </div>
+    `;
+
+    const combosHtml = `
+        <div class="bg-slate-50 border rounded-lg p-3">
+            <div class="text-xs font-semibold text-gray-700 mb-2">Combinacoes no ponto x</div>
+            <div class="grid grid-cols-2 gap-2 text-xs text-gray-600">
+                <div>G (Mgk) = ${memUnit(base.deadAt.M, 'kN.m')}</div>
+                <div>T (Mtk) = ${memUnit(base.trilhoAt.M, 'kN.m')}</div>
+                <div>Q_max = ${memUnit(base.envAt.M_max, 'kN.m')}</div>
+                <div>Q_min = ${memUnit(base.envAt.M_min, 'kN.m')}</div>
+                <div>Vg = ${memUnit(base.deadAt.V, 'kN')}</div>
+                <div>Vt = ${memUnit(base.trilhoAt.V, 'kN')}</div>
+                <div>Vq_max = ${memUnit(base.envAt.V_max, 'kN')}</div>
+                <div>Vq_min = ${memUnit(base.envAt.V_min, 'kN')}</div>
+            </div>
+            <div class="mt-2 grid grid-cols-2 gap-2 text-xs text-gray-600">
+                <div>ELU: M_max = ${memUnit(combos.ELU.M_max, 'kN.m')} | M_min = ${memUnit(combos.ELU.M_min, 'kN.m')}</div>
+                <div>ELU: V_max = ${memUnit(combos.ELU.V_max, 'kN')} | V_min = ${memUnit(combos.ELU.V_min, 'kN')}</div>
+                <div>FADIGA: M_max = ${memUnit(combos.FADIGA.M_max, 'kN.m')} | M_min = ${memUnit(combos.FADIGA.M_min, 'kN.m')}</div>
+                <div>FADIGA: V_max = ${memUnit(combos.FADIGA.V_max, 'kN')} | V_min = ${memUnit(combos.FADIGA.V_min, 'kN')}</div>
+                <div>ELS-QP: M_max = ${memUnit(combos.ELS_QP.M_max, 'kN.m')} | M_min = ${memUnit(combos.ELS_QP.M_min, 'kN.m')}</div>
+                <div>ELS-QP: V_max = ${memUnit(combos.ELS_QP.V_max, 'kN')} | V_min = ${memUnit(combos.ELS_QP.V_min, 'kN')}</div>
+                <div>ELS-FREQ: M_max = ${memUnit(combos.ELS_FREQ.M_max, 'kN.m')} | M_min = ${memUnit(combos.ELS_FREQ.M_min, 'kN.m')}</div>
+                <div>ELS-FREQ: V_max = ${memUnit(combos.ELS_FREQ.V_max, 'kN')} | V_min = ${memUnit(combos.ELS_FREQ.V_min, 'kN')}</div>
+            </div>
+        </div>
+    `;
+
+    const flexHtml = `
+        <details class="border rounded-lg bg-white">
+            <summary class="cursor-pointer px-4 py-2 text-sm font-semibold text-gray-700">Flexao ELU</summary>
+            <div class="px-4 pb-4 space-y-2 text-xs text-gray-600">
+                <pre class="whitespace-pre-wrap bg-slate-50 border rounded p-3">
+Md = max(|M_elu_max|, |M_elu_min|) = max(|${memUnit(combos.ELU.M_max, 'kN.m')}|, |${memUnit(combos.ELU.M_min, 'kN.m')}|) = ${memUnit(Md, 'kN.m')}
+Md = ${memUnit(Md_kNcm, 'kN.cm')}
+fcd = fck/1.4 = ${fck}/1.4 = ${memUnit(fcd, 'MPa')}
+sigma_cd = 0.85*fcd = 0.85*${memUnit(fcd, 'MPa')} = ${memUnit(sigma_cd, 'MPa')}
+a = 0.5*lambda^2*bw*sigma_cd = ${memNum(a, 4)}
+b = -lambda*bw*sigma_cd*d = ${memNum(b, 4)}
+c = Md = ${memNum(c, 2)}
+delta = b^2 - 4ac = ${memNum(delta, 2)}
+x = ${memUnit(flexResult.x, 'cm')}
+xi = x/d = ${memNum(xi, 3)} (limite 0.45)
+z = d - 0.5*lambda*x = ${memUnit(z, 'cm')}
+fyd = fyk/1.15 = ${inputs.fykLong}/1.15 = ${memUnit(fyd, 'MPa')}
+As_calc = Md/(fyd*z) = ${memUnit(flexResult.As_calc, 'cm2')}
+As_min = 0.0015*bw*h = ${memUnit(As_min, 'cm2')}
+As_final = max(As_calc, As_min) = ${memUnit(flexResult.As_final, 'cm2')}
+utilizacao = As_final/As_prov = ${memPercent(flexResult.utilizacao || 0)}
+status = ${flexResult.status}
+                </pre>
+            </div>
+        </details>
+    `;
+
+    const shearHtml = `
+        <details class="border rounded-lg bg-white">
+            <summary class="cursor-pointer px-4 py-2 text-sm font-semibold text-gray-700">Cisalhamento</summary>
+            <div class="px-4 pb-4 space-y-2 text-xs text-gray-600">
+                <pre class="whitespace-pre-wrap bg-slate-50 border rounded p-3">
+Vsd = max(|V_elu_max|, |V_elu_min|) = max(|${memUnit(combos.ELU.V_max, 'kN')}|, |${memUnit(combos.ELU.V_min, 'kN')}|) = ${memUnit(Vsd, 'kN')}
+alpha_v2 = 1 - fck/250 = 1 - ${fck}/250 = ${memNum(alphaV2, 4)}
+Vrd2 = 0.27*alpha_v2*fcd*bw*d = ${memUnit(Vrd2, 'kN')}
+fctm = 0.3*fck^(2/3) = ${memUnit(fctm, 'MPa')}
+fctk_inf = 0.7*fctm = ${memUnit(fctk_inf, 'MPa')}
+fctd = fctk_inf/1.4 = ${memUnit(fctd, 'MPa')}
+Vc0 = 0.6*fctd*bw*d = ${memUnit(Vc0, 'kN')}
+Vsw = max(0, Vsd - Vc0) = ${memUnit(Vsw, 'kN')}
+fywd = min(fywk/1.15, 435) = ${memUnit(fywd, 'MPa')}
+Asw_calc = Vsw/(0.9*d*fywd) = ${memUnit(Asw_calc, 'cm2/m')}
+Asw_min = 0.2*fctm/fywk*bw*100 = ${memUnit(Asw_min, 'cm2/m')}
+Asw_final = max(Asw_calc, Asw_min) = ${memUnit(AswFinal, 'cm2/m')}
+Asw_prov = ${memUnit(Asw_s, 'cm2/m')}
+utilizacao = max(Asw_final/Asw_prov, Vsd/Vrd2) = ${memPercent(Math.max(shearUtil, bielaUtil), 1)}
+s_max = ${memUnit(sMax, 'cm')}
+status = ${shearResult.status}
+                </pre>
+            </div>
+        </details>
+    `;
+
+    const fatigueSteelHtml = `
+        <details class="border rounded-lg bg-white">
+            <summary class="cursor-pointer px-4 py-2 text-sm font-semibold text-gray-700">Fadiga Aco</summary>
+            <div class="px-4 pb-4 space-y-2 text-xs text-gray-600">
+                <pre class="whitespace-pre-wrap bg-slate-50 border rounded p-3">
+M_max = ${memUnit(combos.FADIGA.M_max, 'kN.m')}
+M_min = ${memUnit(combos.FADIGA.M_min, 'kN.m')}
+alpha_e = Es/Ecs = ${Es}/${memNum(Ecs, 2)} = ${memNum(n, 3)}
+x_II = ${memUnit(xII_fad, 'cm')}
+I_II = ${memNum(I_II_fad, 0)} cm4
+sigma_s,max = ${memUnit(sigmaMax, 'MPa')}
+sigma_s,min = ${memUnit(sigmaMin, 'MPa')}
+Delta_sigma = ${memUnit(deltaSigma, 'MPa')}
+limite = ${memUnit(fatigueResult.limite || 0, 'MPa')}
+utilizacao = ${memPercent(fatigueResult.utilizacao || 0)}
+status = ${fatigueResult.status}
+                </pre>
+            </div>
+        </details>
+    `;
+
+    const fatigueConcHtml = `
+        <details class="border rounded-lg bg-white">
+            <summary class="cursor-pointer px-4 py-2 text-sm font-semibold text-gray-700">Fadiga Concreto</summary>
+            <div class="px-4 pb-4 space-y-2 text-xs text-gray-600">
+                <pre class="whitespace-pre-wrap bg-slate-50 border rounded p-3">
+sigma_c,max = ${memUnit(concFatigueResult.sigmaC || 0, 'MPa')}
+limite = 0.45*fcd = ${memUnit(materials.concrete.fcd_fad, 'MPa')}
+utilizacao = ${memPercent(concFatigueResult.utilizacao || 0)}
+status = ${concFatigueResult.status}
+                </pre>
+            </div>
+        </details>
+    `;
+
+    const minMaxHtml = `
+        <details class="border rounded-lg bg-white">
+            <summary class="cursor-pointer px-4 py-2 text-sm font-semibold text-gray-700">Armadura Minima / Maxima</summary>
+            <div class="px-4 pb-4 space-y-2 text-xs text-gray-600">
+                <pre class="whitespace-pre-wrap bg-slate-50 border rounded p-3">
+As_min = 0.0015*bw*h = ${memUnit(As_min, 'cm2')}
+As_max = 0.04*bw*h = ${memUnit(As_max, 'cm2')}
+As_prov = ${memUnit(AsProv, 'cm2')}
+min_ok = ${AsProv >= As_min ? 'OK' : 'ALERTA'}
+max_ok = ${AsProv <= As_max ? 'OK' : 'ALERTA'}
+                </pre>
+            </div>
+        </details>
+    `;
+
+    const ductilityHtml = `
+        <details class="border rounded-lg bg-white">
+            <summary class="cursor-pointer px-4 py-2 text-sm font-semibold text-gray-700">Ductilidade</summary>
+            <div class="px-4 pb-4 space-y-2 text-xs text-gray-600">
+                <pre class="whitespace-pre-wrap bg-slate-50 border rounded p-3">
+xi = x/d = ${memNum(xi, 3)}
+limite = 0.45
+status = ${xi <= 0.45 ? 'OK' : 'ALERTA'}
+                </pre>
+            </div>
+        </details>
+    `;
+
+    const crackHtml = `
+        <details class="border rounded-lg bg-white">
+            <summary class="cursor-pointer px-4 py-2 text-sm font-semibold text-gray-700">Fissuracao (ELS-FREQ)</summary>
+            <div class="px-4 pb-4 space-y-2 text-xs text-gray-600">
+                <pre class="whitespace-pre-wrap bg-slate-50 border rounded p-3">
+M_freq = max(|M_els_freq_max|, |M_els_freq_min|) = ${memUnit(M_freq, 'kN.m')}
+Mr = alpha*fctm*Ic/yt = ${memUnit(serviceVerifier.Mr, 'kN.m')}
+alpha_e = Es/Ecs = ${memNum(serviceVerifier.alpha_e, 3)}
+sigma_si = alpha_e * M * (d - x_II) / I_II = ${memUnit(sigma_si, 'MPa')}
+Acri = bw * min(2.5*(h-d), h/2) = ${memUnit(Acri, 'cm2')}
+rho_ri = As / Acri = ${memNum(rho_ri, 4)}
+w1 = (phi/(12.5*eta1))*(sigma/E_s)*(3*sigma/fctm) = ${memUnit(wk1, 'mm')}
+w2 = (phi/(12.5*eta1))*(sigma/E_s)*(4/rho_ri + 45) = ${memUnit(wk2, 'mm')}
+wk = min(w1, w2) = ${memUnit(wk, 'mm')}
+limite = ${memUnit(inputs.wkLim, 'mm')}
+status = ${wk <= inputs.wkLim ? 'OK' : 'ALERTA'}
+                </pre>
+            </div>
+        </details>
+    `;
+
+    return `
+        <details class="border rounded-lg bg-white">
+            <summary class="cursor-pointer px-4 py-3 font-semibold text-gray-800">${section.name} | x = ${memNum(section.x, 2)} m</summary>
+            <div class="px-4 pb-4 space-y-4">
+                ${inputsHtml}
+                ${combosHtml}
+                ${flexHtml}
+                ${shearHtml}
+                ${fatigueSteelHtml}
+                ${minMaxHtml}
+                ${fatigueConcHtml}
+                ${ductilityHtml}
+                ${crackHtml}
+            </div>
+        </details>
+    `;
+}
+
+function updateMemoriaCalculo(sections = null) {
+    const container = document.getElementById('memoria-content');
+    if (!container) return;
+
+    if (!loadProcessor) {
+        container.innerHTML = '<div class="text-sm text-gray-500">Clique em CALCULAR para gerar a memoria.</div>';
+        return;
+    }
+
+    const items = sections || loadProcessor.findCriticalSections();
+    if (!items.length) {
+        container.innerHTML = '<div class="text-sm text-gray-500">Sem secoes criticas disponiveis.</div>';
+        return;
+    }
+
+    const inputs = getDetailInputs();
+    const fck = getNumericValue('inp-fck', 30);
+    const materials = new SectionMaterials(fck, inputs.fykLong);
+
+    const deflectionHtml = buildMemoriaDeflection(inputs, materials);
+    const sectionsHtml = items.map((section) => buildSectionMemory(section, inputs, materials)).join('');
+
+    container.innerHTML = `${deflectionHtml}${sectionsHtml}`;
+}
+
 function renderDetailSectionList() {
     const container = document.getElementById('detail-section-list');
     if (!container) return;
@@ -1508,9 +2226,11 @@ function renderSectionSvg(inputs) {
         h,
         cover,
         barPhi,
+        barPhiComp,
         stirrPhi,
         layers,
         nBars,
+        nBarsComp,
         clearSpacing,
         momentPositive,
         neutralAxis
@@ -1534,9 +2254,11 @@ function renderSectionSvg(inputs) {
     const toY = y => offsetY + y * scale;
 
     const barDia = barPhi / 10;
+    const barDiaComp = barPhiComp / 10;
     const stirrDia = stirrPhi / 10;
     const stirrOffset = cover + stirrDia / 2;
     const barOffset = cover + stirrDia + barDia / 2;
+    const barOffsetComp = cover + stirrDia + barDiaComp / 2;
 
     const outerRect = createSvgElement('rect', {
         x: toX(0),
@@ -1566,6 +2288,7 @@ function renderSectionSvg(inputs) {
     }
 
     const innerWidth = bw - 2 * barOffset;
+    const innerWidthComp = bw - 2 * barOffsetComp;
     const yBottom = h - barOffset;
     const yTop = barOffset;
     const availableHeight = Math.max(0, yBottom - yTop);
@@ -1577,8 +2300,6 @@ function renderSectionSvg(inputs) {
     const startY = momentPositive === false ? yTop : yBottom;
     const layerDirection = momentPositive === false ? 1 : -1;
     const { counts } = computeLayerCounts(nBars, layers, innerWidth, minCenterSpacing);
-    const baseCount = counts.find(count => count > 0) || 0;
-    const basePositions = computeLayerPositions(baseCount, bw, barOffset, innerWidth);
     const barRadius = Math.max(1.5, (barDia / 2) * scale);
 
     for (let layer = 0; layer < layers; layer++) {
@@ -1586,9 +2307,7 @@ function renderSectionSvg(inputs) {
         if (count <= 0) continue;
         const y = layers > 1 ? startY + layer * layerSpacing * layerDirection : startY;
 
-        const positions = (count === baseCount && basePositions.length)
-            ? basePositions
-            : alignLayerPositions(count, basePositions, bw, barOffset, innerWidth);
+        const positions = computeLayerPositions(count, bw, barOffset, innerWidth);
 
         positions.forEach((posX) => {
             const cx = toX(posX);
@@ -1602,6 +2321,42 @@ function renderSectionSvg(inputs) {
                 'stroke-width': 1
             }));
         });
+    }
+
+    if (nBarsComp > 0) {
+        const minCenterSpacingComp = barDiaComp + (Number.isFinite(clearSpacing) ? clearSpacing : 2.5);
+        const yTopComp = barOffsetComp;
+        const yBottomComp = h - barOffsetComp;
+        const availableHeightComp = Math.max(0, yBottomComp - yTopComp);
+        let layerSpacingComp = layers > 1 ? minCenterSpacingComp : 0;
+        if (layers > 1 && availableHeightComp > 0 && layerSpacingComp > availableHeightComp / (layers - 1)) {
+            layerSpacingComp = availableHeightComp / (layers - 1);
+        }
+
+        const startYComp = momentPositive === false ? yBottomComp : yTopComp;
+        const layerDirectionComp = momentPositive === false ? -1 : 1;
+        const { counts: compCounts } = computeLayerCounts(nBarsComp, layers, innerWidthComp, minCenterSpacingComp);
+        const barRadiusComp = Math.max(1.5, (barDiaComp / 2) * scale);
+
+        for (let layer = 0; layer < layers; layer++) {
+            const count = compCounts[layer];
+            if (count <= 0) continue;
+            const y = layers > 1 ? startYComp + layer * layerSpacingComp * layerDirectionComp : startYComp;
+            const positions = computeLayerPositions(count, bw, barOffsetComp, innerWidthComp);
+
+            positions.forEach((posX) => {
+                const cx = toX(posX);
+                const cy = toY(y);
+                svg.appendChild(createSvgElement('circle', {
+                    cx,
+                    cy,
+                    r: barRadiusComp,
+                    fill: '#14b8a6',
+                    stroke: '#0f766e',
+                    'stroke-width': 1
+                }));
+            });
+        }
     }
 
     if (Number.isFinite(neutralAxis) && neutralAxis > 0) {
@@ -1777,7 +2532,11 @@ function setupDetailInputs() {
         'inp-stirr-phi',
         'inp-stirr-s',
         'inp-fyk-long',
-        'inp-fyk-stirr'
+        'inp-fyk-stirr',
+        'inp-nbars-comp',
+        'inp-phi-comp',
+        'inp-caa',
+        'inp-wk-lim'
     ];
     ids.forEach((id) => {
         const elements = getInputElements(id);
@@ -1914,6 +2673,7 @@ document.addEventListener('DOMContentLoaded', () => {
     updateLayoutMetrics();
     syncImpactInputs();
     setupImpactInputs();
+    setupServiceInputs();
     initCharts();
     initDeflectionChart();
     setupExcelUpload();
